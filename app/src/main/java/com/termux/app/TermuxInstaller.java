@@ -25,9 +25,13 @@ import com.termux.shared.termux.shell.command.environment.TermuxShellEnvironment
 
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.ZipEntry;
@@ -218,6 +222,10 @@ final class TermuxInstaller {
 
                     Logger.logInfo(LOG_TAG, "Bootstrap packages installed successfully.");
 
+                    // OpenCode-auto: copy asset hook into $PREFIX (staging already renamed).
+                    // Must not fail bootstrap if hook install fails.
+                    installOpencodeHookIfNeeded(activity);
+
                     // Recreate env file since termux prefix was wiped earlier
                     TermuxShellEnvironment.writeEnvironmentToFile(activity);
 
@@ -237,6 +245,62 @@ final class TermuxInstaller {
                 }
             }
         }.start();
+    }
+
+    private static void installOpencodeHookIfNeeded(Activity activity) {
+        try {
+            File profileDDir = new File(TERMUX_PREFIX_DIR_PATH + "/etc/profile.d");
+            if (!profileDDir.exists() && !profileDDir.mkdirs()) {
+                Logger.logError(LOG_TAG, "Failed to create directory: " + profileDDir.getAbsolutePath());
+                return;
+            }
+
+            File dest = new File(profileDDir, "10-opencode.sh");
+            try (InputStream in = activity.getAssets().open("opencode-setup.sh");
+                 OutputStream out = new FileOutputStream(dest, false)) {
+                byte[] buf = new byte[8096];
+                int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            }
+            try {
+                Os.chmod(dest.getAbsolutePath(), 0700);
+            } catch (Exception e) {
+                Logger.logError(LOG_TAG, "Failed to chmod " + dest.getAbsolutePath() + ": " + e.getMessage());
+            }
+
+            // Fallback if login shell does not source profile.d: ensure
+            // interactive bash also loads the hook via etc/bash.bashrc.
+            try {
+                File bashrc = new File(TERMUX_PREFIX_DIR_PATH + "/etc/bash.bashrc");
+                String marker = "10-opencode.sh";
+                boolean needsAppend = true;
+                if (bashrc.exists()) {
+                    try (FileInputStream fin = new FileInputStream(bashrc);
+                         ByteArrayOutputStream bout = new ByteArrayOutputStream()) {
+                        byte[] buf = new byte[8096];
+                        int n;
+                        while ((n = fin.read(buf)) != -1) bout.write(buf, 0, n);
+                        String content = bout.toString("UTF-8");
+                        if (content.contains(marker)) needsAppend = false;
+                    }
+                } else {
+                    File parent = bashrc.getParentFile();
+                    if (parent != null && !parent.exists()) parent.mkdirs();
+                }
+                if (needsAppend) {
+                    try (FileOutputStream fout = new FileOutputStream(bashrc, true)) {
+                        String line = "\n# opencode-auto: load profile.d hook for interactive bash\n[ -f \"$PREFIX/etc/profile.d/10-opencode.sh\" ] && . \"$PREFIX/etc/profile.d/10-opencode.sh\"\n";
+                        fout.write(line.getBytes("UTF-8"));
+                    }
+                }
+            } catch (Exception e) {
+                Logger.logError(LOG_TAG, "Failed to patch bash.bashrc for opencode hook: " + e.getMessage());
+            }
+
+            Logger.logInfo(LOG_TAG, "OpenCode hook installed to " + dest.getAbsolutePath());
+        } catch (Exception e) {
+            Logger.logError(LOG_TAG, "Failed to install opencode hook: " + e.getMessage());
+        }
     }
 
     public static void showBootstrapErrorDialog(Activity activity, Runnable whenDone, String message) {
