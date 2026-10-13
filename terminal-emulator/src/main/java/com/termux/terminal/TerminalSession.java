@@ -27,8 +27,13 @@ import java.util.UUID;
  * The child process may be exited forcefully by using the {@link #finishIfRunning()} method.
  * <p>
  * NOTE: The terminal session may outlive the EmulatorView, so be careful with callbacks!
+ *
+ * <p>OpenCode pty sessions (server-side terminals rendered in the app) subclass this
+ * class; they override {@link #updateSize}, {@link #getEmulator} and {@link #write}
+ * to wire the emulator to a remote process instead of a local subprocess, and never
+ * call {@link #initializeEmulator} (which would spawn a local OS pty).</p>
  */
-public final class TerminalSession extends TerminalOutput {
+public class TerminalSession extends TerminalOutput {
 
     private static final int MSG_NEW_INPUT = 1;
     private static final int MSG_PROCESS_EXITED = 4;

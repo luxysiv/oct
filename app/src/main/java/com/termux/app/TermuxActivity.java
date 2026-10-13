@@ -28,6 +28,7 @@ import android.widget.Toast;
 
 import com.termux.R;
 import com.termux.app.api.file.FileReceiverActivity;
+import com.termux.app.opencode.OpenCodeSetup;
 import com.termux.app.terminal.TermuxActivityRootView;
 import com.termux.app.terminal.TermuxTerminalSessionActivityClient;
 import com.termux.app.terminal.io.TermuxTerminalExtraKeys;
@@ -407,6 +408,12 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                     } catch (WindowManager.BadTokenException e) {
                         // Activity finished - ignore.
                     }
+                    // Terminal-first OpenCode bootstrap: $PREFIX is ready now, so
+                    // install the native CLI + its runtime libraries on a background
+                    // thread (apt-get glibc/patchelf, then the patched binary from
+                    // npm) — `opencode` in the terminal then just works. Runs only
+                    // after bootstrap to avoid racing with this bootstrap callback.
+                    OpenCodeSetup.ensureAsync(TermuxActivity.this);
                 });
             } else {
                 // The service connected while not in foreground - just bail out.
@@ -423,6 +430,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             } else {
                 mTermuxTerminalSessionActivityClient.setCurrentSession(mTermuxTerminalSessionActivityClient.getCurrentStoredSessionOrLast());
             }
+            // Sessions already exist → the bootstrap finished earlier; keep the
+            // native CLI up to date in the background (installs only if missing
+            // or outdated).
+            OpenCodeSetup.ensureAsync(TermuxActivity.this);
         }
 
         // Update the {@link TerminalSession} and {@link TerminalEmulator} clients.

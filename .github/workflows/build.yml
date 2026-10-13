@@ -1,0 +1,135 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# The default token needs write access to create/update the rolling GitHub
+# release we upload the APK to (artifacts expire, release assets do not).
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Test + Build APK (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v6
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Setup java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle cache
+        # Cache dependencies + task outputs (incl. test results) so
+        # unchanged code restores outputs instead of re-running.
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Execute tests
+        run: |
+          ./gradlew test
+
+      - name: Set up signing key
+        shell: bash {0}
+        env:
+          OCT_KEYSTORE_BASE64: ${{ secrets.OCT_KEYSTORE_BASE64 }}
+          OCT_KEYSTORE_PASSWORD: ${{ secrets.OCT_KEYSTORE_PASSWORD }}
+          OCT_KEY_ALIAS: ${{ secrets.OCT_KEY_ALIAS }}
+          OCT_KEY_PASSWORD: ${{ secrets.OCT_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${OCT_KEYSTORE_BASE64:-}" ]; then
+            echo "$OCT_KEYSTORE_BASE64" | base64 -d > "${GITHUB_WORKSPACE}/app/oct-release.jks"
+            echo "OCT_KEYSTORE_FILE=${GITHUB_WORKSPACE}/app/oct-release.jks" >> $GITHUB_ENV
+            echo "OCT_KEYSTORE_PASSWORD=$OCT_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            echo "OCT_KEY_ALIAS=$OCT_KEY_ALIAS" >> $GITHUB_ENV
+            echo "OCT_KEY_PASSWORD=$OCT_KEY_PASSWORD" >> $GITHUB_ENV
+            keytool -list -keystore "${GITHUB_WORKSPACE}/app/oct-release.jks" \
+              -storepass "$OCT_KEYSTORE_PASSWORD" -alias "$OCT_KEY_ALIAS" >/dev/null \
+              || { echo "Keystore validation failed"; exit 1; }
+            echo "Using stable signing key"
+          else
+            echo "No signing secrets configured; using testkey fallback"
+          fi
+
+      - name: Build APK
+        shell: bash {0}
+        env:
+          PACKAGE_VARIANT: apt-android-7
+        run: |
+          set -euo pipefail
+
+          echo "Setting vars"
+
+          APK_DIR_PATH="./app/build/outputs/apk/debug"
+          if [ "$GITHUB_EVENT_NAME" == "pull_request" ]; then
+            GITHUB_SHA="${{ github.event.pull_request.head.sha }}" # Do not use last merge commit set in GITHUB_SHA
+          fi
+
+          # Set RELEASE_VERSION_NAME to "<CURRENT_VERSION_NAME>+<last_commit_hash>"
+          CURRENT_VERSION_NAME_REGEX='\s+versionName "([^"]+)"$'
+          CURRENT_VERSION_NAME="$(grep -m 1 -E "$CURRENT_VERSION_NAME_REGEX" ./app/build.gradle | sed -r "s/$CURRENT_VERSION_NAME_REGEX/\1/")"
+          RELEASE_VERSION_NAME="v$CURRENT_VERSION_NAME+${GITHUB_SHA:0:7}" # The "+" is necessary so that versioning precedence is not affected
+          if ! printf "%s" "${RELEASE_VERSION_NAME/v/}" | grep -qP '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$'; then
+            echo "The versionName '${RELEASE_VERSION_NAME/v/}' is not a valid version as per semantic version '2.0.0' spec. https://semver.org/spec/v2.0.0.html."
+            exit 1
+          fi
+
+          APK_VERSION_TAG="$RELEASE_VERSION_NAME-${{ env.PACKAGE_VARIANT }}-github-debug"
+          APK_BASENAME_PREFIX="termux-app_$APK_VERSION_TAG"
+
+          echo "APK_DIR_PATH=$APK_DIR_PATH" >> $GITHUB_ENV
+          echo "APK_BASENAME_PREFIX=$APK_BASENAME_PREFIX" >> $GITHUB_ENV
+
+          echo "Building APK for '$APK_VERSION_TAG'"
+          export TERMUX_APP_VERSION_NAME="${RELEASE_VERSION_NAME/v/}" # Used by app/build.gradle
+          export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG" # Used by app/build.gradle
+          export TERMUX_PACKAGE_VARIANT="${{ env.PACKAGE_VARIANT }}" # Used by app/build.gradle
+          export TERMUX_SPLIT_APKS_FOR_DEBUG_BUILDS=1 # Used by app/build.gradle
+          ./gradlew assembleDebug
+
+          echo "Validating APK"
+          APK_FILE="$APK_DIR_PATH/${APK_BASENAME_PREFIX}_arm64-v8a.apk"
+          test -f "$APK_FILE" || { echo "APK not found at '$APK_FILE'. Files found:"; ls "$APK_DIR_PATH"; exit 1; }
+
+          echo "Generating sha256sums file"
+          (cd "$APK_DIR_PATH"; sha256sum "${APK_BASENAME_PREFIX}_arm64-v8a.apk" > "${APK_BASENAME_PREFIX}_sha256sums")
+
+      - name: Delete old nightly release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Remove the previous nightly release, its tag and old APK assets
+          # so the new upload starts clean instead of accumulating files.
+          gh release delete nightly --cleanup-tag --yes || true
+
+      - name: Upload APK to GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: nightly
+          name: Nightly (arm64-v8a)
+          body: |
+            Bản build mới nhất từ nhánh master.
+            Tải file `.apk` trong phần Assets bên dưới rồi cài.
+            Nếu cài báo lỗi chữ ký (INSTALL_FAILED_UPDATE_INCOMPATIBLE),
+            hãy gỡ cài app `oct` cũ trước khi cài APK mới.
+          files: |
+            ${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_arm64-v8a.apk
+            ${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_sha256sums
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: true
+          overwrite_files: true

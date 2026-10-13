@@ -71,18 +71,37 @@ android {
                 enable ((gradle.startParameter.taskNames.any { it.contains("Debug") } && splitAPKsForDebugBuilds == "1") ||
                     (gradle.startParameter.taskNames.any { it.contains("Release") } && splitAPKsForReleaseBuilds == "1"))
                 reset ()
-                include 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
-                universalApk true
+                include 'arm64-v8a'
+                universalApk false
             }
         }
     }
 
     signingConfigs {
+        // Stable signing key supplied via CI secrets (OCT_KEYSTORE_*).
+        // Falls back to the checked-in testkey when no key is configured, so
+        // local builds keep working.
         debug {
-            storeFile file('testkey_untrusted.jks')
-            keyAlias 'alias'
-            storePassword 'xrj45yWGLbsO7W0v'
-            keyPassword 'xrj45yWGLbsO7W0v'
+            if (System.getenv("OCT_KEYSTORE_FILE") != null && new File(System.getenv("OCT_KEYSTORE_FILE")).exists()) {
+                storeFile file(System.getenv("OCT_KEYSTORE_FILE"))
+                storePassword System.getenv("OCT_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("OCT_KEY_ALIAS")
+                keyPassword System.getenv("OCT_KEY_PASSWORD")
+            } else {
+                storeFile file('testkey_untrusted.jks')
+                keyAlias 'alias'
+                storePassword 'xrj45yWGLbsO7W0v'
+                keyPassword 'xrj45yWGLbsO7W0v'
+            }
+        }
+
+        release {
+            if (System.getenv("OCT_KEYSTORE_FILE") != null && new File(System.getenv("OCT_KEYSTORE_FILE")).exists()) {
+                storeFile file(System.getenv("OCT_KEYSTORE_FILE"))
+                storePassword System.getenv("OCT_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("OCT_KEY_ALIAS")
+                keyPassword System.getenv("OCT_KEY_PASSWORD")
+            }
         }
     }
 
@@ -91,6 +110,9 @@ android {
             minifyEnabled true
             shrinkResources false // Reproducible builds
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (System.getenv("OCT_KEYSTORE_FILE") != null) {
+                signingConfig signingConfigs.release
+            }
         }
 
         debug {

@@ -107,6 +107,31 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
     private static final String LOG_TAG = "TermuxService";
 
+    /** Static reference to the running service so app components can stop a
+     * background task by name without binding. */
+    @Nullable
+    private static TermuxService sInstance;
+
+    /** @return the running {@link TermuxService}, or {@code null} if not started. */
+    @Nullable
+    public static TermuxService getInstance() {
+        return sInstance;
+    }
+
+    /**
+     * Kill the background app-shell task with the given {@code shellName}, if any.
+     * Used to stop the OpenCode backend before a repair/restart.
+     *
+     * @return {@code true} if a matching executing task was found.
+     */
+    public boolean killTaskByName(String shellName) {
+        if (shellName == null) return false;
+        AppShell task = getTermuxTaskForShellName(shellName);
+        if (task == null) return false;
+        task.killIfExecuting(this, false);
+        return true;
+    }
+
     @Override
     public void onCreate() {
         Logger.logVerbose(LOG_TAG, "onCreate");
@@ -116,6 +141,9 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         mProperties = TermuxAppSharedProperties.getProperties();
 
         mShellManager = TermuxShellManager.getShellManager();
+
+        // Publish this instance only after mShellManager is ready (killTaskByName uses it).
+        sInstance = this;
 
         runStartForeground();
 
@@ -168,6 +196,8 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     @Override
     public void onDestroy() {
         Logger.logVerbose(LOG_TAG, "onDestroy");
+
+        sInstance = null;
 
         TermuxShellUtils.clearTermuxTMPDIR(true);
 
