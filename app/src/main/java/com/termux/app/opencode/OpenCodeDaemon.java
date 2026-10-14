@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
  * The password is the credential for HTTP Basic authentication
  * ({@code opencode:<password>}); the web client turns it into a session cookie
  * via {@code /api/pair} + {@code /auth/connect/<code>} (see
- * {@code OpenCodeClientActivity}).</p>
+ * {@code TermuxActivity}) TUI.</p>
  *
  * <p>When not registered as a service the server prints a second line
  * ({@code server password <pw>}) which is still honoured as a fallback.</p>

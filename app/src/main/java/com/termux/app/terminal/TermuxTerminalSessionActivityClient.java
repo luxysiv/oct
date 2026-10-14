@@ -362,6 +362,15 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     }
 
     public void addNewSession(boolean isFailSafe, String sessionName) {
+        addNewSession(null, isFailSafe, sessionName);
+    }
+
+    /**
+     * Add a new {@link TermuxSession}. When {@code executablePath} is
+     * {@code null} a normal login shell is started; otherwise the given
+     * executable runs directly (e.g. the {@code opencode} TUI).
+     */
+    public void addNewSession(String executablePath, boolean isFailSafe, String sessionName) {
         TermuxService service = mActivity.getTermuxService();
         if (service == null) return;
 
@@ -378,7 +387,7 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
                 workingDirectory = currentSession.getCwd();
             }
 
-            TermuxSession newTermuxSession = service.createTermuxSession(null, null, null, workingDirectory, isFailSafe, sessionName);
+            TermuxSession newTermuxSession = service.createTermuxSession(executablePath, null, null, workingDirectory, isFailSafe, sessionName);
             if (newTermuxSession == null) return;
 
             TerminalSession newTerminalSession = newTermuxSession.getTerminalSession();

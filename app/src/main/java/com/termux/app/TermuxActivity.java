@@ -404,9 +404,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                         if (intent != null && intent.getExtras() != null) {
                             launchFailsafe = intent.getExtras().getBoolean(TERMUX_ACTIVITY.EXTRA_FAILSAFE_SESSION, false);
                         }
-                        // Terminal-first: when the app is opened from the launcher
-                        // (ACTION_MAIN) and the CLI is installed, start the `opencode`
-                        // TUI right away instead of a bare login shell.
+                        // Launcher opens the Termux TUI. Start the `opencode` TUI.
                         String action = intent != null ? intent.getAction() : null;
                         boolean fromLauncher = !mIsActivityRecreated
                             && (action == null || Intent.ACTION_MAIN.equals(action));

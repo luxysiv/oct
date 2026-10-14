@@ -69,11 +69,6 @@ public final class OpenCodeDaemonService extends Service implements OpenCodeDaem
     private static final String CHANNEL_NAME = "OpenCode daemon";
     private static final int NOTIFICATION_ID = 20011;
 
-    /** OpenCode MCP server entry name for the Termux:API tool bridge. */
-    private static final String MCP_SERVER_NAME = "termux-api";
-    /** APK asset holding the MCP stdio server script. */
-    private static final String MCP_ASSET = "opencode/termux-api-mcp.sh";
-
     /** Backoff (ms) between automatic restarts, capped at the last value. */
     private static final long[] RESTART_DELAYS = {1000L, 2000L, 5000L, 10000L, 30000L};
 
@@ -259,88 +254,11 @@ public final class OpenCodeDaemonService extends Service implements OpenCodeDaem
      *
      * <p>Best-effort: failures are logged and ignored so the daemon still
      * starts. The bridge is registered before the daemon so the freshly started
-     * server loads the new config.</p>
+     * server loads the new config. Shared with {@link OpenCodeSetup} so the
+     * terminal-first path registers it too.</p>
      */
     private void ensureMcpBridge() {
-        File prefix = new File(TermuxConstants.TERMUX_PREFIX_DIR_PATH);
-        File home = new File(TermuxConstants.TERMUX_HOME_DIR_PATH);
-        File binDir = new File(new File(home, ".opencode"), "bin");
-        File script = new File(binDir, MCP_SERVER_NAME + "-mcp.sh");
-        File cli = new File(binDir, "opencode");
-
-        if (!copyAsset(MCP_ASSET, script)) {
-            Logger.logError(LOG_TAG, "could not install MCP bridge script");
-            return;
-        }
-
-        File config = new File(new File(new File(home, ".config"), "opencode"), "opencode.json");
-        if (fileContains(config, "\"" + MCP_SERVER_NAME + "\"")) return; // already registered
-
-        // Register with an explicit interpreter. Termux has no /usr/bin/env, so
-        // a shebang-based spawn fails with NotFound; `bash <script>` is robust.
-        File bash = new File(new File(prefix, "bin"), "bash");
-        String output = runCli(cli, prefix, home,
-            "mcp", "add", "--global", MCP_SERVER_NAME, "--",
-            bash.getAbsolutePath(), script.getAbsolutePath());
-        Logger.logInfo(LOG_TAG, "registered MCP bridge: " + output.trim());
-    }
-
-    /** Copy an APK asset to a file and mark it executable. */
-    private boolean copyAsset(String assetPath, File dest) {
-        File parent = dest.getParentFile();
-        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) return false;
-        try (InputStream in = getAssets().open(assetPath);
-             OutputStream out = new FileOutputStream(dest)) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) > 0) out.write(buffer, 0, read);
-        } catch (IOException e) {
-            Logger.logError(LOG_TAG, "asset copy failed: " + e.getMessage());
-            return false;
-        }
-        //noinspection ResultOfMethodCallIgnored
-        dest.setExecutable(true, false);
-        return true;
-    }
-
-    /** Run a short-lived CLI command with the daemon's clean environment. */
-    private String runCli(File cli, File prefix, File home, String... args) {
-        List<String> argv = new ArrayList<>();
-        argv.add(cli.getAbsolutePath());
-        for (String arg : args) argv.add(arg);
-        ProcessBuilder builder = new ProcessBuilder(argv);
-        builder.directory(home);
-        builder.redirectErrorStream(true);
-        builder.environment().clear();
-        Map<String, String> env = OpenCodeDaemon.baseEnv(prefix, home, new File(prefix, "tmp"));
-        builder.environment().putAll(env);
-        try {
-            Process process = builder.start();
-            StringBuilder output = new StringBuilder();
-            try (BufferedReader reader =
-                     new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"))) {
-                String line;
-                while ((line = reader.readLine()) != null) output.append(line).append('\n');
-            }
-            process.waitFor();
-            return output.toString();
-        } catch (Exception e) {
-            return "error: " + e.getMessage();
-        }
-    }
-
-    /** True if the file exists and contains the given text. */
-    private static boolean fileContains(File file, String needle) {
-        if (file == null || !file.isFile()) return false;
-        try (BufferedReader reader = new BufferedReader(
-                 new InputStreamReader(new java.io.FileInputStream(file), "UTF-8"))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) sb.append(line);
-            return sb.indexOf(needle) >= 0;
-        } catch (IOException e) {
-            return false;
-        }
+        OpenCodeMcp.ensure(this);
     }
 
     private void scheduleRestart() {
@@ -449,7 +367,8 @@ public final class OpenCodeDaemonService extends Service implements OpenCodeDaem
     }
 
     private Notification buildNotification() {
-        Intent openIntent = OpenCodeClientActivity.newInstance(this);
+        Intent openIntent = new Intent(this, com.termux.app.TermuxActivity.class);
+        openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0, openIntent,
             pendingIntentFlags());
 

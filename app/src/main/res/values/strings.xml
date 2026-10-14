@@ -16,10 +16,9 @@
     <string name="application_name">&TERMUX_APP_NAME;</string>
     <string name="shared_user_label">&TERMUX_APP_NAME; user</string>
 
-    <!-- OpenCode client: the launcher window onto the daemon's web UI, plus the
-         foreground service that owns the daemon. -->
+    <!-- OpenCode: the terminal/TUI is the main entry point; the web client and
+         its foreground daemon service are reachable from a launcher shortcut. -->
     <string name="opencode_webview_title">OpenCode</string>
-    <string name="opencode_terminal_short">OpenCode Terminal</string>
     <string name="opencode_daemon_notification_title">OpenCode server</string>
 
 
