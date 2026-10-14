@@ -293,6 +293,35 @@ lần đầu (chưa cài) → shell rồi tự cài.
 `com.termux`. (Manifest placeholder `TERMUX_APP_NAME` trong `app/build.gradle`
 không được manifest nào dùng, chỉ cập nhật cho nhất quán.)
 
+### Gia cố installer + wrapper (2026-10-14)
+
+Rà soát 5 điểm gãy khi `opencode upgrade` / cập nhật glibc ghi đè runtime:
+
+1. **Wrapper tự chữa lành**: `$PREFIX/bin/opencode` kiểm tra
+   `~/.opencode/.patched` (do Java ghi `<size> <mtime>`) với
+   `stat -c '%s %Y'` của binary. Lệch ⇒ chạy binary qua loader tường minh
+   (`ld.so --library-path "$GLIBCLIB" "$BIN"`), vốn chạy được cả khi interpreter
+   đã bị ghi đè — kèm cảnh báo bảo mở app để vá lại; khớp ⇒ `exec "$BIN"`.
+2. **Kiểm tra loader**: thiếu `$PREFIX/glibc/lib/ld-linux-aarch64.so.1` ⇒ thoát
+   `127` kèm thông báo thay vì lỗi "not found" khó hiểu.
+3. **Đổi binary 1 bước nguyên tử**: `installStaged()` chỉ còn một
+   `renameTo(staged, bin)` (bỏ `bin → bin.old` trước đó, từng để lộ khoảng không
+   có binary nếu tiến trình chết giữa chừng).
+4. **`.patched` + `opencode service restart`**: sau khi thay binary, Java ghi lại
+   `.patched` và (khi đây là **update**, tức bản cũ chạy được) gọi
+   `opencode service restart` best-effort để dịch vụ nền không phục vụ bản cũ.
+   Khi binary cũ chạy trực tiếp được nhưng marker lệch, marker cũng được ghi lại
+   ở nhánh "đã mới nhất".
+5. **Ghim phiên bản**: `~/.opencode/pin` (một `x.y.z`) giữ app ở đúng bản, kể cả
+   **hạ cấp**; có pin thì bỏ qua cache "vừa kiểm tra" (luôn đối chiếu registry).
+   `NpmSource.version()` thêm để tra đúng version; thiếu endpoint vẫn dùng được
+   tên package mặc định `@opencode/cli`.
+
+**Lưu ý môi trường**: bỏ `LD_PRELOAD` cho tiến trình glibc làm mất
+`libtermux-exec` của các tiến trình con ⇒ shebang `#!/usr/bin/env …` hỏng
+(`/usr/bin/env` không tồn tại). Đã kiểm chứng và ghi lại trong
+[`ENVIRONMENT.md`](ENVIRONMENT.md).
+
 ### Chưa làm / rủi ro còn lại
 
 - **Chưa build được trên máy**: Termux này không có JDK/Android SDK

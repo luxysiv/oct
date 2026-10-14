@@ -51,7 +51,7 @@ public final class OpenCodeInstaller {
      * force an already-installed wrapper to be rewritten (the old shell bootstrap
      * wrote {@code opencode-native-wrapper-vN} markers that must be replaced).
      */
-    static final String WRAPPER_MARKER = "opencode-native-wrapper-java-v2";
+    static final String WRAPPER_MARKER = "opencode-native-wrapper-java-v3";
 
     public enum Outcome { UP_TO_DATE, INSTALLED, UPDATED, FAILED, BUSY }
 
@@ -112,6 +112,15 @@ public final class OpenCodeInstaller {
     /** Where the release comes from; swappable so a bionic build can be tried later. */
     public interface Source {
         Release latest(Http http, String arch) throws IOException;
+
+        /**
+         * Resolve one exact version, used when a version is pinned in
+         * {@code ~/.opencode/pin}. The default refuses, so a source that cannot
+         * do exact lookups degrades to the plain update path.
+         */
+        default Release version(Http http, String arch, String version) throws IOException {
+            throw new IOException("pinned versions are not supported by this source");
+        }
     }
 
     /** A downloadable CLI build. */
@@ -136,7 +145,6 @@ public final class OpenCodeInstaller {
         public final File binDir;
         public final File bin;
         public final File staged;
-        public final File old;
         public final File versionFile;
         public final File stateFile;
         public final File lockFile;
@@ -148,18 +156,22 @@ public final class OpenCodeInstaller {
         public final File patchelfGlibc;
         public final File patchelfBin;
         public final File aptGet;
+        /** {@code <size> <mtime>} of the binary whose interpreter was patched. */
+        public final File patchedFile;
+        /** Optional pinned version, one line, e.g. {@code 2.0.27}. */
+        public final File pinFile;
 
         private Paths(File prefix, File home, File homeDir, File binDir, File bin, File staged,
-                      File old, File versionFile, File stateFile, File lockFile, File tmpDir,
+                      File versionFile, File stateFile, File lockFile, File tmpDir,
                       File lastCheckFile, File wrapper, File glibcLib, File loader,
-                      File patchelfGlibc, File patchelfBin, File aptGet) {
+                      File patchelfGlibc, File patchelfBin, File aptGet,
+                      File patchedFile, File pinFile) {
             this.prefix = prefix;
             this.home = home;
             this.homeDir = homeDir;
             this.binDir = binDir;
             this.bin = bin;
             this.staged = staged;
-            this.old = old;
             this.versionFile = versionFile;
             this.stateFile = stateFile;
             this.lockFile = lockFile;
@@ -171,6 +183,8 @@ public final class OpenCodeInstaller {
             this.patchelfGlibc = patchelfGlibc;
             this.patchelfBin = patchelfBin;
             this.aptGet = aptGet;
+            this.patchedFile = patchedFile;
+            this.pinFile = pinFile;
         }
 
         public static Paths of(File prefix, File home, String arch) {
@@ -181,7 +195,6 @@ public final class OpenCodeInstaller {
             return new Paths(
                 prefix, home, homeDir, binDir, bin,
                 new File(binDir, "opencode.new"),
-                new File(binDir, "opencode.old"),
                 new File(homeDir, "version"),
                 new File(homeDir, "state"),
                 new File(homeDir, "install.lock"),
@@ -192,7 +205,9 @@ public final class OpenCodeInstaller {
                 new File(glibcLib, loaderName(arch)),
                 new File(prefix, "glibc/bin/patchelf"),
                 new File(prefix, "bin/patchelf"),
-                new File(prefix, "bin/apt-get"));
+                new File(prefix, "bin/apt-get"),
+                new File(homeDir, ".patched"),
+                new File(homeDir, "pin"));
         }
 
         File patchelf() {
@@ -300,14 +315,29 @@ public final class OpenCodeInstaller {
         removeLegacyBootstrap();
         ensureWrapper();
 
-        if (!reinstall && binOk && current != null && !update && !checkExpired()) {
+        // Keep the launcher's "this binary is patched" marker in sync whenever
+        // the installed binary really runs directly. This heals the marker if
+        // the binary was swapped by something that still starts (e.g.
+        // `opencode upgrade`), so the launcher stops taking the loader fallback.
+        if (binOk) writePatchedMarker();
+
+        // `~/.opencode/pin` holds a single version (e.g. "2.0.27"). It keeps the
+        // app on an exact build even if the release channel moves on, and allows
+        // an explicit downgrade. Anything after the first token is ignored.
+        String pinned = readString(paths.pinFile);
+        if (pinned != null) {
+            String[] tokens = pinned.split("\\s+");
+            pinned = (tokens.length > 0 && !tokens[0].isEmpty()) ? tokens[0] : null;
+        }
+
+        if (!reinstall && !update && pinned == null && binOk && current != null && !checkExpired()) {
             return upToDate(current, "Cached check is fresh");
         }
 
         Release release;
         try {
             state("checking", "Đang kiểm tra phiên bản OpenCode…");
-            release = source.latest(http, arch);
+            release = (pinned != null) ? source.version(http, arch, pinned) : source.latest(http, arch);
         } catch (IOException e) {
             if (binOk) {
                 return upToDate(current, "Metadata unavailable: " + e.getMessage());
@@ -320,7 +350,13 @@ public final class OpenCodeInstaller {
             return fail("Thông tin bản phát hành thiếu version.");
         }
 
-        if (!reinstall && binOk && current != null && !OpenCodeSemVer.isNewer(release.version, current)) {
+        // With a pin, "already there" means the installed version equals the
+        // pin (which may point at an older build, so a downgrade is allowed).
+        // Without one, only a strictly newer release triggers work.
+        boolean targetReached = (pinned != null)
+            ? (current != null && OpenCodeSemVer.compare(pinned, current) == 0)
+            : !OpenCodeSemVer.isNewer(release.version, current);
+        if (!reinstall && binOk && current != null && targetReached) {
             writeLastCheck();
             return upToDate(current, null);
         }
@@ -367,7 +403,13 @@ public final class OpenCodeInstaller {
 
             writeString(paths.versionFile, release.version);
             writeLastCheck();
+            writePatchedMarker();
             state("ok", "OpenCode sẵn sàng (v" + release.version + ").");
+            // A running server would otherwise keep serving the old build while
+            // the TUI runs the new one, and the v2 API changes often. Only do
+            // this when we are replacing an existing binary. Done after the "ok"
+            // state so a slow restart cannot hold up the success UI.
+            if (binOk) restartBackgroundService();
             return new Result(binOk ? Outcome.UPDATED : Outcome.INSTALLED, release.version, null);
         } catch (IOException e) {
             return fail("Tải/cài đặt thất bại: " + e.getMessage());
@@ -522,22 +564,18 @@ public final class OpenCodeInstaller {
     // Staging / install.
     // ------------------------------------------------------------------
 
+    /**
+     * Move the verified staged binary into place with a single same-directory
+     * rename. {@code rename(2)} replaces the destination atomically, so a crash
+     * mid-swap can never leave the launcher with no binary at all (the old code
+     * renamed {@code bin} to {@code bin.old} first, leaving exactly that window).
+     */
     private boolean installStaged() {
         if (!paths.staged.isFile()) return false;
-        delete(paths.old);
-        if (paths.bin.exists() && !paths.bin.renameTo(paths.old)) {
-            log("could not move old binary aside");
-            return false;
-        }
         if (!paths.staged.renameTo(paths.bin)) {
             log("could not move staged binary into place");
-            if (paths.old.exists()) {
-                //noinspection ResultOfMethodCallIgnored
-                paths.old.renameTo(paths.bin);
-            }
             return false;
         }
-        delete(paths.old);
         return true;
     }
 
@@ -566,17 +604,61 @@ public final class OpenCodeInstaller {
      * The managed launcher (terminal-first). There is no native chat UI on
      * this branch: a bare interactive call (or any argument) simply execs the
      * patched binary so the original TUI runs in the terminal.
+     *
+     * <p>The launcher is also the first line of self-defence: {@code opencode
+     * upgrade} (or a glibc update) can leave a binary whose ELF interpreter is
+     * no longer the Termux glibc loader. Rather than failing with a cryptic
+     * error it falls back to invoking the loader explicitly, which works for
+     * both patched and unpatched binaries.</p>
+     *
+     * <p>The file is run by {@code dash} (Termux's {@code /bin/sh}), so the
+     * script sticks to POSIX shell.</p>
      */
     String wrapperScript() {
         String bin = paths.bin.getAbsolutePath();
+        String loader = paths.loader.getAbsolutePath();
+        String glibcLib = paths.glibcLib.getAbsolutePath();
+        String patched = paths.patchedFile.getAbsolutePath();
+        // Absolute paths to coreutils, so the check also works when PATH is
+        // minimal (the app spawns the CLI with a trimmed environment).
+        String stat = new File(paths.prefix, "bin/stat").getAbsolutePath();
+        String cat = new File(paths.prefix, "bin/cat").getAbsolutePath();
+
         StringBuilder sb = new StringBuilder();
         sb.append("#!").append(paths.prefix.getAbsolutePath()).append("/bin/sh\n");
         sb.append("# ").append(WRAPPER_MARKER).append(" (managed by OpenCodeInstaller)\n");
         sb.append("BIN=\"").append(bin).append("\"\n");
+        sb.append("LOADER=\"").append(loader).append("\"\n");
+        sb.append("GLIBCLIB=\"").append(glibcLib).append("\"\n");
+        sb.append("PATCHED=\"").append(patched).append("\"\n");
+        sb.append("STAT=\"").append(stat).append("\"\n");
+        sb.append("CAT=\"").append(cat).append("\"\n");
+        sb.append("\n");
         sb.append("if [ ! -x \"$BIN\" ]; then\n");
         sb.append("  echo \"opencode: chưa cài xong — mở lại app Termux để tự cài đặt.\" >&2\n");
         sb.append("  exit 127\n");
         sb.append("fi\n");
+        sb.append("\n");
+        sb.append("# The binary must be started through the Termux glibc loader. If the\n");
+        sb.append("# runtime was removed, say so instead of a meaningless \"not found\".\n");
+        sb.append("if [ ! -x \"$LOADER\" ]; then\n");
+        sb.append("  echo \"opencode: thiếu glibc runtime — mở lại app Termux để cài lại.\" >&2\n");
+        sb.append("  exit 127\n");
+        sb.append("fi\n");
+        sb.append("\n");
+        sb.append("# The marker records \"<size> <mtime>\" of the binary whose interpreter we\n");
+        sb.append("# patched. `opencode upgrade` (or a glibc update) can overwrite it; then a\n");
+        sb.append("# bare exec dies with a confusing error, so invoke the loader explicitly.\n");
+        sb.append("MARK=$(\"$CAT\" \"$PATCHED\" 2>/dev/null)\n");
+        sb.append("NOW=$(\"$STAT\" -c '%s %Y' \"$BIN\" 2>/dev/null)\n");
+        sb.append("if [ -z \"$MARK\" ] || [ \"$MARK\" != \"$NOW\" ]; then\n");
+        sb.append("  echo \"opencode: binary chưa được vá — chạy tạm qua loader; mở lại app Termux để vá lại.\" >&2\n");
+        sb.append("  export OPENCODE_DISABLE_AUTOUPDATE=1\n");
+        sb.append("  unset LD_PRELOAD\n");
+        sb.append("  unset LD_LIBRARY_PATH\n");
+        sb.append("  exec \"$LOADER\" --library-path \"$GLIBCLIB\" \"$BIN\" \"$@\"\n");
+        sb.append("fi\n");
+        sb.append("\n");
         sb.append("export OPENCODE_DISABLE_AUTOUPDATE=1\n");
         sb.append("# Termux preloads the bionic libtermux-exec; the glibc loader would\n");
         sb.append("# otherwise try to load the bionic libc.so and fail.\n");
@@ -584,6 +666,36 @@ public final class OpenCodeInstaller {
         sb.append("unset LD_LIBRARY_PATH\n");
         sb.append("exec \"$BIN\" \"$@\"\n");
         return sb.toString();
+    }
+
+    /**
+     * Record {@code <size> <mtime-in-seconds>} of the binary that currently runs
+     * directly, so the launcher can tell whether it is still the build we
+     * patched. Mirrors {@code stat -c '%s %Y'} in {@link #wrapperScript()}.
+     */
+    private void writePatchedMarker() {
+        File bin = paths.bin;
+        if (bin == null || !bin.isFile()) return;
+        long size = bin.length();
+        // mtime is positive (post-1970), so integer division is floor division.
+        long mtimeSeconds = bin.lastModified() / 1000L;
+        try {
+            writeString(paths.patchedFile, size + " " + mtimeSeconds);
+        } catch (IOException e) {
+            log("could not write patch marker: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Ask the shared background service to restart after the binary changed, so
+     * a previously running server does not keep serving the old build while the
+     * TUI runs the new one. Best-effort: a missing or unreachable service is
+     * not an install failure.
+     */
+    private void restartBackgroundService() {
+        if (!paths.bin.isFile()) return;
+        log("restarting OpenCode background service…");
+        run(Arrays.asList(paths.bin.getAbsolutePath(), "service", "restart"), paths.home, cleanEnv());
     }
 
     /** Delete the legacy POSIX bootstrap so login shells stop re-installing it. */
@@ -857,6 +969,7 @@ public final class OpenCodeInstaller {
     public static final class NpmSource implements Source {
         static final String UPDATE_ENDPOINT = "https://opencode.ai/update/api/latest/cli/npm";
         static final String REGISTRY = "https://registry.npmjs.org";
+        static final String DEFAULT_PACKAGE = "@opencode/cli";
 
         @Override
         public Release latest(Http http, String arch) throws IOException {
@@ -866,8 +979,31 @@ public final class OpenCodeInstaller {
                 throw new IOException("update endpoint returned no version");
             }
             String pkg = OpenCodeJson.string(meta, "package");
-            if (pkg == null || pkg.isEmpty()) pkg = "@opencode/cli";
+            if (pkg == null || pkg.isEmpty()) pkg = DEFAULT_PACKAGE;
+            return resolve(http, arch, pkg, version);
+        }
 
+        @Override
+        public Release version(Http http, String arch, String version) throws IOException {
+            if (version == null || version.isEmpty()) {
+                throw new IOException("no pinned version");
+            }
+            // The update endpoint is the only place the package name is
+            // published; consult it for the name only, and tolerate it being
+            // unavailable (offline pinning should still work).
+            String pkg = DEFAULT_PACKAGE;
+            try {
+                String meta = http.getString(UPDATE_ENDPOINT, 1 << 16);
+                String p = OpenCodeJson.string(meta, "package");
+                if (p != null && !p.isEmpty()) pkg = p;
+            } catch (IOException ignored) {
+                // Offline or endpoint down: the default package name is fine.
+            }
+            return resolve(http, arch, pkg, version);
+        }
+
+        private static Release resolve(Http http, String arch, String pkg, String version)
+            throws IOException {
             String target = "linux-" + arch;
             String scope = scopeOf(pkg);                 // "@opencode"
             String platform = scope + "/cli-" + target;  // "@opencode/cli-linux-arm64"

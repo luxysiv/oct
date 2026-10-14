@@ -110,6 +110,26 @@ public class OpenCodeInstallerTest {
         // The glibc environment is cleaned before executing the binary.
         assertTrue(wrapper.contains("unset LD_PRELOAD"));
         assertTrue(wrapper.contains("unset LD_LIBRARY_PATH"));
+        // Self-healing: if the binary is no longer the one we patched (e.g. after
+        // `opencode upgrade`), fall back to running it through the loader.
+        assertTrue(wrapper.contains("LOADER=\""));
+        assertTrue(wrapper.contains("--library-path \"$GLIBCLIB\""));
+        assertTrue(wrapper.contains("PATCHED=\""));
+    }
+
+    @Test
+    public void writesPatchMarkerAfterInstall() throws Exception {
+        http.bytes = tarBytes;
+        source.release = new OpenCodeInstaller.Release(
+            "2.0.27", "https://example.test/cli.tgz", integrityOf(tarBytes));
+
+        installer().ensure(false, false);
+
+        assertTrue(paths.bin.isFile());
+        assertTrue(paths.patchedFile.isFile());
+        String expected = paths.bin.length() + " "
+            + (paths.bin.lastModified() / 1000L);
+        assertEquals(expected, OpenCodeInstaller.readString(paths.patchedFile));
     }
 
     @Test
@@ -162,6 +182,50 @@ public class OpenCodeInstallerTest {
     }
 
     @Test
+    public void pinnedVersionIsInstalledEvenWhenOlderThanCurrent() throws Exception {
+        // An installed, directly-runnable 2.0.27 with a fresh check cache...
+        assertTrue(paths.bin.createNewFile());
+        runner.runnable.add(paths.bin.getAbsolutePath());
+        runner.versionOutput = "2.0.27";
+        OpenCodeInstaller.writeString(paths.versionFile, "2.0.27");
+        OpenCodeInstaller.writeString(paths.lastCheckFile, String.valueOf(System.currentTimeMillis()));
+        // ...must still be replaced when the user pins an older build. The pin
+        // also disables the cached "no network needed" short circuit, and a
+        // trailing comment must not turn it into a pre-release.
+        OpenCodeInstaller.writeString(paths.pinFile, "2.0.25  # hold");
+        http.bytes = tarBytes;
+        source.release = new OpenCodeInstaller.Release(
+            "2.0.25", "https://example.test/cli.tgz", integrityOf(tarBytes));
+
+        OpenCodeInstaller.Result result = installer().ensure(false, false);
+
+        assertEquals(OpenCodeInstaller.Outcome.UPDATED, result.outcome);
+        assertTrue(source.versionCalled);
+        assertEquals("2.0.25", source.requestedVersion);
+        assertFalse(source.called);
+        assertEquals("2.0.25", OpenCodeInstaller.readString(paths.versionFile));
+        assertEquals("2.0.25", result.version);
+    }
+
+    @Test
+    public void pinnedVersionMatchingCurrentIsUpToDate() throws Exception {
+        assertTrue(paths.bin.createNewFile());
+        runner.runnable.add(paths.bin.getAbsolutePath());
+        runner.versionOutput = "2.0.25";
+        OpenCodeInstaller.writeString(paths.versionFile, "2.0.25");
+        OpenCodeInstaller.writeString(paths.lastCheckFile, "0");
+        OpenCodeInstaller.writeString(paths.pinFile, "2.0.25");
+        source.release = new OpenCodeInstaller.Release(
+            "2.0.25", "https://example.test/cli.tgz", integrityOf(tarBytes));
+
+        OpenCodeInstaller.Result result = installer().ensure(false, false);
+
+        assertEquals(OpenCodeInstaller.Outcome.UP_TO_DATE, result.outcome);
+        assertTrue(source.versionCalled);
+        assertFalse(source.called);
+    }
+
+    @Test
     public void rejectsCorruptDownload() throws Exception {
         http.bytes = tarBytes;
         source.release = new OpenCodeInstaller.Release(
@@ -210,10 +274,21 @@ public class OpenCodeInstallerTest {
         OpenCodeInstaller.Release release;
         boolean fail;
         boolean called;
+        boolean versionCalled;
+        String requestedVersion;
 
         @Override
         public OpenCodeInstaller.Release latest(OpenCodeInstaller.Http http, String arch) throws IOException {
             called = true;
+            if (fail) throw new IOException("offline");
+            return release;
+        }
+
+        @Override
+        public OpenCodeInstaller.Release version(OpenCodeInstaller.Http http, String arch, String version)
+            throws IOException {
+            versionCalled = true;
+            requestedVersion = version;
             if (fail) throw new IOException("offline");
             return release;
         }

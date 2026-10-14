@@ -63,6 +63,38 @@ public class OpenCodeNpmSourceTest {
     }
 
     @Test
+    public void resolvesExactPinnedVersionAgainstRegistry() throws Exception {
+        MapHttp http = new MapHttp();
+        http.responses.put(OpenCodeInstaller.NpmSource.UPDATE_ENDPOINT,
+            "{\"version\":\"2.0.27\",\"package\":\"@opencode/cli\"}");
+        http.responses.put("https://registry.npmjs.org/@opencode/cli-linux-arm64/2.0.25",
+            "{\"dist\":{\"integrity\":\"sha512-old\",\"tarball\":\"https://reg/old.tgz\"}}");
+
+        OpenCodeInstaller.Release release =
+            new OpenCodeInstaller.NpmSource().version(http, "arm64", "2.0.25");
+
+        assertEquals("2.0.25", release.version);
+        assertEquals("sha512-old", release.integrity);
+        assertEquals("https://reg/old.tgz", release.tarballUrl);
+    }
+
+    @Test
+    public void resolvesPinnedVersionEvenWhenUpdateEndpointIsOffline() throws Exception {
+        MapHttp http = new MapHttp();
+        // No UPDATE_ENDPOINT response: the default package name must be used.
+        http.responses.put("https://registry.npmjs.org/@opencode/cli-linux-arm64/2.0.25",
+            "{\"dist\":{\"integrity\":\"sha512-old\"}}");
+
+        OpenCodeInstaller.Release release =
+            new OpenCodeInstaller.NpmSource().version(http, "arm64", "2.0.25");
+
+        assertEquals("2.0.25", release.version);
+        assertEquals(
+            "https://registry.npmjs.org/@opencode/cli-linux-arm64/-/cli-linux-arm64-2.0.25.tgz",
+            release.tarballUrl);
+    }
+
+    @Test
     public void jsonReaderHandlesEscapes() {
         assertEquals("a\"b", OpenCodeJson.string("{\"k\":\"a\\\"b\"}", "k"));
         assertEquals("x", OpenCodeJson.string("{\"other\":1,\"k\":\"x\"}", "k"));
