@@ -417,17 +417,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                         } else {
                             mTermuxTerminalSessionActivityClient.addNewSession(launchFailsafe, null);
                         }
-                        // Start the shared OpenCode daemon service (foreground) so the
-                        // TUI and any client share one `serve --service` instance.
-                        try {
-                            Intent daemon = new Intent(TermuxActivity.this, com.termux.app.opencode.OpenCodeDaemonService.class);
-                            daemon.setAction(com.termux.app.opencode.OpenCodeDaemonService.ACTION_START);
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                startForegroundService(daemon);
-                            } else {
-                                startService(daemon);
-                            }
-                        } catch (Exception ignored) { }
+                        // Do not auto-start the OpenCode daemon service in TUI-only mode;
+                        // the TUI manages its own server lifecycle when needed.
                     } catch (WindowManager.BadTokenException e) {
                         // Activity finished - ignore.
                     }
