@@ -20,6 +20,7 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.os.Build;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ListView;
