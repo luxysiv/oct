@@ -1,10 +1,13 @@
 # OpenCode trên oct
 
-> **Trạng thái `main` (từ 2026-10-14): OpenCode-first (P1).** Mở app = mở
+> **Trạng thái `main` (từ 2026-10-14): OpenCode-first (P2).** Mở app = mở
 > **client OpenCode** (WebView launcher). Một foreground service
-> (`OpenCodeDaemonService`) sở hữu daemon `opencode serve` trên loopback, giữ nó
-> chạy nền/foreground và tự restart. Terminal Termux vẫn nguyên vẹn, vào qua
-> shortcut "OpenCode Terminal"/`am start`. Chi tiết ở mục **P1** cuối file.
+> (`OpenCodeDaemonService`) sở hữu daemon `opencode serve --service` trên loopback
+> và **đăng ký luôn thành dịch vụ nền dùng chung** — TUI terminal (`opencode`) và
+> client web nói cùng **một** server/session/config. Kèm **cầu nối tool
+> `termux-api` qua MCP** để assistant gọi được notification/clipboard/battery…
+> Terminal Termux vẫn nguyên vẹn, vào qua shortcut "OpenCode Terminal"/`am start`.
+> Chi tiết ở mục **P1** và **P2** cuối file.
 >
 > Quá trình cài đặt (giữ từ P0): `OpenCodeSetup` (khi mở terminal) và
 > `OpenCodeDaemonService` (khi mở client) chạy `OpenCodeInstaller` trong nền:
@@ -115,6 +118,9 @@ Rồi chạy `termux-reload-settings`.
 | `~/.opencode/install.lock` | khoá chống chạy trùng installer |
 | `~/.opencode/reinstall` | marker ép cài lại ở lần mở app kế tiếp |
 | `~/.opencode/bin/opencode` | binary đã patch |
+| `~/.opencode/bin/termux-api-mcp.sh` | MCP stdio server cầu nối tool `termux-api` (P2) |
+| `~/.config/opencode/opencode.json` | config OpenCode toàn cục; chứa đăng ký MCP `termux-api` (P2) |
+| `~/.local/state/opencode/service.json` | đăng ký dịch vụ nền dùng chung (`serve --service` ghi) |
 | `$PREFIX/bin/opencode` | wrapper terminal (`exec` trực tiếp binary) |
 
 ## P0 — đảo trục: OpenCode làm chủ, app làm vỏ (2026-10-14)
@@ -152,7 +158,7 @@ Ba mảnh, đều trong `com.termux.app.opencode`:
 
 | Thành phần | Vai trò |
 |---|---|
-| `OpenCodeDaemon` | bọc tiến trình `opencode serve` (Android-free): chạy `serve --hostname 127.0.0.1 --port 0`, đọc stdout, parse `server listening on <url>` + `server password <pw>`; `stop()` = SIGTERM |
+| `OpenCodeDaemon` | bọc tiến trình `opencode serve` (Android-free): chạy `serve --hostname 127.0.0.1 --port 0` (P2: thêm `--service` và đọc mật khẩu từ file trạng thái khi server không in ra), đọc stdout, parse `server listening on <url>` + `server password <pw>`; `stop()` = SIGTERM |
 | `OpenCodeDaemonService` | foreground service **sở hữu** daemon: cài đặt → chạy → wakelock + notification → restart backoff; trả `START_STICKY` |
 | `OpenCodeClientActivity` | launcher client: start/bind service, chờ `Info`, pair rồi `loadUrl` web UI |
 
@@ -177,9 +183,65 @@ am start -n com.termux/com.termux.app.opencode.OpenCodeClientActivity
 # hoặc chỉ mở icon app — đây là launcher
 ```
 
-Log daemon ở `~/.opencode/daemon.log`. Chưa đổi: đây là instance `serve` riêng
-của app; terminal TUI vẫn nối vào dịch vụ dùng chung (`opencode service`). Hợp
-nhất hai cái (và tool bridge `termux-api` qua MCP) để lại cho P2.
+Log daemon ở `~/.opencode/daemon.log`. Từ **P2** instance này chạy thêm cờ
+`--service` nên trở thành **dịch vụ nền dùng chung** (terminal TUI và client web
+nói cùng một server); xem mục **P2** ngay dưới.
+
+### P2 — hợp nhất daemon + cầu nối tool `termux-api` (2026-10-14)
+
+Chạy lại tự động: `bash scripts/opencode-p2-proof.sh` (17/17 PASS trên
+`opencode v2.0.28`).
+
+#### A. Hợp nhất daemon: app sở hữu **chính** dịch vụ nền
+
+`OpenCodeDaemon` giờ chạy `opencode serve --service --hostname 127.0.0.1 --port 0`:
+
+- vẫn là **tiến trình con trực tiếp** của foreground service (không daemonize) →
+  `stop()` = SIGTERM sạch;
+- `--service` khiến OpenCode tự ghi sổ đăng ký dịch vụ
+  (`~/.local/state/opencode/service.json` = `{id,version,url,pid,password}` +
+  `~/.config/opencode/service.json` = `{password}`), nên `opencode` TUI,
+  `opencode api`, `opencode pair` … đều trỏ vào **cùng** instance của app;
+- điểm khác biệt: chế độ `--service` **không in** dòng `server password` ra
+  stdout. `OpenCodeDaemon` đọc mật khẩu từ file trạng thái (khớp theo `url` để
+  bỏ qua đăng ký cũ); dòng `server password` trên stdout vẫn được nhận nếu có;
+- dừng sạch → OpenCode tự xoá đăng ký (`opencode service status` → `stopped`).
+
+Kiểm chứng: `scripts/opencode-p2-proof.sh` phần **A** dựng một HOME tạm (không
+đụng đăng ký thật): service chạy foreground, không in mật khẩu, file trạng thái
+khớp url/mật khẩu, `opencode service status` trỏ đúng instance, Basic auth +
+`/api/pair` chạy qua service, SIGTERM xoá đăng ký.
+
+Ghi chú: nếu đã có sẵn một dịch vụ nền khác đang chạy, instance của app vẫn khởi
+động bình thường và **ghi đè đăng ký** (instance cũ thành mồ côi nhưng không lỗi);
+các lệnh `opencode` mới sẽ nối vào instance của app.
+
+#### B. Cầu nối tool `termux-api` qua MCP
+
+App nhúng một **MCP stdio server** viết bằng bash+awk (không cần node/python/jq —
+chỉ dùng thứ Termux có sẵn): `app/src/main/assets/opencode/termux-api-mcp.sh`.
+
+- `OpenCodeDaemonService.ensureMcpBridge()` copy script ra
+  `~/.opencode/bin/termux-api-mcp.sh` (đặt quyền thực thi) rồi **đăng ký** vào
+  config toàn cục bằng `opencode mcp add --global termux-api -- $PREFIX/bin/bash <script>`
+  (chỉ chạy khi entry chưa có). Config ghi vào `~/.config/opencode/opencode.json`:
+  `{"mcp":{"servers":{"termux-api":{"type":"local","command":["…/bash","…/termux-api-mcp.sh"]}}}}`.
+  Đăng ký kèm **interpreter tường minh** vì Termux không có `/usr/bin/env`, nên
+  spawn theo shebang sẽ lỗi `NotFound: ChildProcess.spawn`; `bash <script>` thì chắc chắn chạy.
+- Script nói JSON-RPC 2.0 **một dòng/message** (transport stdio): `initialize`,
+  `notifications/initialized`, `ping`, `tools/list`, `tools/call`; giải mã tham số
+  kiểu chuỗi (nháy kép, `\n`, `\t`, `\uXXXX`).
+- Tool phơi ra: `termux_notification`, `termux_toast`, `termux_clipboard_get`,
+  `termux_clipboard_set`, `termux_battery_status`, `termux_vibrate`,
+  `termux_tts_speak`, `termux_location` — đều gọi thẳng `termux-*`.
+- **Cần** gói `termux-api` (`pkg install termux-api`) + app **Termux:API**. Khi
+  thiếu, mỗi tool trả lỗi có hướng dẫn thay vì làm hỏng phiên.
+
+Kiểm chứng: `scripts/opencode-p2-proof.sh` phần **B** (chạy script trực tiếp, stub
+`termux-*` để kiểm tra dispatch + giải mã tham số, và khung một-dòng-JSON).
+
+> **Bật nhanh:** `pkg install termux-api` rồi cài app Termux:API; mở lại app
+> (client) để service đăng ký MCP; kiểm tra bằng `opencode mcp list`.
 
 ### Đổi nhãn (giữ package)
 
@@ -193,5 +255,8 @@ không được manifest nào dùng, chỉ cập nhật cho nhất quán.)
 - **Chưa build được trên máy**: Termux này không có JDK/Android SDK
   (`java: not found`, `ANDROID_HOME` trống) → APK phải build ở CI/máy khác.
 - WebView cũ (máy API thấp) có thể thiếu ES module → cần Custom Tab/native client.
-- **P2**: tool bridge `termux-api` qua MCP, hợp nhất daemon của app với dịch vụ
-  dùng chung, và cân nhắc Custom Tab/native client cho máy WebView cũ.
+- **P2 xong**: đã hợp nhất daemon (app sở hữu dịch vụ dùng chung) và thêm cầu nối
+  tool `termux-api` qua MCP.
+- **P3 (ứng viên)**: cầu nối tool **trong tiến trình app** (gọi thẳng API Android —
+  giàu hơn `termux-*` CLI, không cần app Termux:API); tự cài `termux-api`; dọn
+  instance dịch vụ mồ côi khi ghi đè đăng ký; Custom Tab/native client cho WebView cũ.
