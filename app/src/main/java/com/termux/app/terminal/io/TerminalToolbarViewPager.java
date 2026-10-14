@@ -3,6 +3,7 @@ package com.termux.app.terminal.io;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 
 import androidx.annotation.NonNull;
@@ -12,7 +13,9 @@ import androidx.viewpager.widget.ViewPager;
 import com.termux.R;
 import com.termux.app.TermuxActivity;
 import com.termux.shared.termux.extrakeys.ExtraKeysView;
+import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
+import com.termux.view.TerminalView;
 
 public class TerminalToolbarViewPager {
 
@@ -64,20 +67,22 @@ public class TerminalToolbarViewPager {
                     mSavedTextInput = null;
                 }
 
+                // The field is multi-line so that long prompts can be composed with a
+                // full IME (Vietnamese etc.). Only explicit submit actions send; a plain
+                // Enter key must fall through so it inserts a newline instead.
                 editText.setOnEditorActionListener((v, actionId, event) -> {
-                    TerminalSession session = mActivity.getCurrentSession();
-                    if (session != null) {
-                        if (session.isRunning()) {
-                            String textToSend = editText.getText().toString();
-                            if (textToSend.length() == 0) textToSend = "\r";
-                            session.write(textToSend);
-                        } else {
-                            mActivity.getTermuxTerminalSessionClient().removeFinishedSession(session);
-                        }
-                        editText.setText("");
+                    if (actionId == EditorInfo.IME_ACTION_SEND
+                        || actionId == EditorInfo.IME_ACTION_DONE
+                        || actionId == EditorInfo.IME_ACTION_GO) {
+                        sendComposedText(mActivity, editText);
+                        return true;
                     }
-                    return true;
+                    return false;
                 });
+
+                final View sendButton = layout.findViewById(R.id.terminal_toolbar_text_send);
+                if (sendButton != null)
+                    sendButton.setOnClickListener(v -> sendComposedText(mActivity, editText));
             }
             collection.addView(layout);
             return layout;
@@ -88,6 +93,53 @@ public class TerminalToolbarViewPager {
             collection.removeView((View) view);
         }
 
+    }
+
+    /**
+     * Send the composed toolbar text to the current terminal session.
+     *
+     * <p>The text is injected through {@link TerminalEmulator#paste(String)} instead of a raw
+     * {@link TerminalSession#write(byte[], int, int)} so that:
+     * <ul>
+     *   <li>programs that enabled bracketed paste (DECSET 2004), such as the OpenCode TUI,
+     *       receive the whole block as a single paste event — one redraw instead of one per
+     *       character, which is what made Vietnamese and long input feel laggy;</li>
+     *   <li>escape and C1 control characters are stripped and newlines normalised, so a prompt
+     *       can no longer be misread as keystrokes (stray submits/cancels);</li>
+     *   <li>embedded newlines stay literal, allowing multi-line prompts.</li>
+     * </ul>
+     *
+     * <p>A carriage return is written outside the paste markers to submit the prompt. The text
+     * is only cleared once it has been handed off, so a failed send does not lose it.
+     */
+    static void sendComposedText(TermuxActivity activity, EditText editText) {
+        TerminalSession session = activity.getCurrentSession();
+        if (session == null) return;
+
+        if (!session.isRunning()) {
+            activity.getTermuxTerminalSessionClient().removeFinishedSession(session);
+            return;
+        }
+
+        String text = editText.getText().toString();
+        if (text.isEmpty()) {
+            // Nothing typed: treat it as pressing Enter in the terminal.
+            session.write("\r");
+            return;
+        }
+
+        TerminalView terminalView = activity.getTerminalView();
+        TerminalEmulator emulator = terminalView != null ? terminalView.mEmulator : null;
+        if (emulator != null) {
+            emulator.paste(text);
+            session.write("\r");
+        } else {
+            // Fallback for when the emulator is not available yet.
+            session.write(text);
+        }
+        editText.setText("");
+        // Keep the compose field focused so the IME stays up for the next prompt.
+        editText.requestFocus();
     }
 
 
