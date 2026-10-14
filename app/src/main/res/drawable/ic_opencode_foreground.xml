@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    OpenCode launcher foreground: a 4-point spark (the app's `✦` model glyph),
+    distinct from the Termux `>_` prompt. 108dp adaptive canvas, content kept
+    inside the 72dp safe zone.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:height="108dp"
+    android:width="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,22
+                          C54,38 38,54 22,54
+                          C38,54 54,70 54,86
+                          C54,70 70,54 86,54
+                          C70,54 54,38 54,22
+                          Z" />
+</vector>

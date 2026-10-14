@@ -1,3 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- OpenCode launcher icon background. -->
+    <color name="ic_opencode_background">#82AAFF</color>
 </resources>
