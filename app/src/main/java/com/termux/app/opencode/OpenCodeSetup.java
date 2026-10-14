@@ -89,6 +89,23 @@ public final class OpenCodeSetup {
      */
     public static final File REINSTALL_MARKER_FILE = new File(OPENCODE_DIR, "reinstall");
 
+    /**
+     * The {@code $PREFIX/bin/opencode} launcher written by the installer. When it
+     * exists the CLI is usable, so {@code TermuxActivity} can start the TUI
+     * directly in a terminal session instead of a bare login shell.
+     */
+    public static final File CLI_WRAPPER_FILE = new File(PREFIX_DIR, "bin/opencode");
+
+    /** Whether the {@code opencode} CLI launcher is installed and runnable. */
+    public static boolean isCliInstalled() {
+        return CLI_WRAPPER_FILE.isFile();
+    }
+
+    /** Absolute path of the {@code opencode} CLI launcher, to run the TUI. */
+    public static String cliWrapperPath() {
+        return CLI_WRAPPER_FILE.getAbsolutePath();
+    }
+
     /** States that represent real (potentially slow) install work. */
     private static final java.util.Set<String> WORK_STATES = new java.util.HashSet<>(java.util.Arrays.asList(
         "deps", "download", "configure"));
@@ -152,6 +169,12 @@ public final class OpenCodeSetup {
                 arch,
                 Build.VERSION.SDK_INT);
             OpenCodeInstaller.Result result = installer.ensure(reinstall, false);
+            if (result != null && result.ok()) {
+                // Terminal-first: register the Termux:API tool bridge here so the
+                // `opencode` TUI picks the tools up even if the WebView client (and
+                // its daemon service) is never opened.
+                OpenCodeMcp.ensure(activity);
+            }
             StringBuilder msg = new StringBuilder();
             if (result != null && result.outcome != null) {
                 msg.append("OpenCode: ").append(result.outcome.name());
@@ -167,8 +190,10 @@ public final class OpenCodeSetup {
             Logger.logInfo(LOG_TAG, msg.toString());
             if (result != null && result.ok()) {
                 writeState("ok\nOpenCode sẵn sàng.");
+                writeMarker(new File(OPENCODE_DIR, "state.ok"));
             } else {
                 writeState("error\n" + msg);
+                writeMarker(new File(OPENCODE_DIR, "state.error"));
             }
             finishUI(activity, result != null && result.ok(), msg.toString());
         } catch (Throwable t) {
@@ -506,6 +531,18 @@ public final class OpenCodeSetup {
             out.write(text.getBytes("UTF-8"));
         } catch (IOException e) {
             Logger.logError(LOG_TAG, "could not write " + file.getAbsolutePath() + ": " + e);
+        }
+    }
+
+    private static void writeMarker(File file) {
+        File parent = file.getParentFile();
+        if (parent != null && !parent.isDirectory()) {
+            //noinspection ResultOfMethodCallIgnored
+            parent.mkdirs();
+        }
+        try (OutputStream out = new FileOutputStream(file, false)) {
+            out.write(Long.toString(System.currentTimeMillis()).getBytes("UTF-8"));
+        } catch (IOException ignored) {
         }
     }
 
