@@ -261,6 +261,31 @@ service của app mới khởi động và ghi đè đăng ký — TUI mới n�
 Kiểm chứng: biên dịch/cài qua CI; trên máy: mở app khi đã cài CLI → vào thẳng TUI,
 lần đầu (chưa cài) → shell rồi tự cài.
 
+### Nhập tiếng Việt trong TUI (ô nhập toolbar, 2026-10-14)
+
+- Gõ trực tiếp trong TUI kém vì terminal dùng `InputType.TYPE_NULL` (IME không có
+  vùng soạn thảo/gợi ý). Ô nhập native ở trang 2 của toolbar vẫn là chỗ gõ tốt
+  (IME Android đầy đủ, Telex/VNI), nhưng trước đây nó đẩy text vào PTY bằng
+  `session.write(text)` trần:
+  - TUI `opencode` **bật bracketed paste** (DECSET 2004) nên text bị xử lý như gõ
+    từng ký tự → mỗi ký tự re-render → **giật**.
+  - Không lọc `ESC`/ký tự điều khiển C1, không chuẩn hoá newline → TUI có thể hiểu
+    nhầm thành phím (tự submit/huỷ) → **lỗi**.
+- Sửa (`TerminalToolbarViewPager.sendComposedText`): đẩy text qua
+  `TerminalEmulator.paste()` — tự bọc `\033[200~ … \033[201~` khi app bật 2004,
+  **lọc `ESC`/C1**, đổi newline → `\r`. TUI nhận **một `PasteMsg`** = một lần
+  render (mượt), newline là literal (đa dòng). Sau đó ghi `\r` ngoài marker để
+  submit.
+- Ô nhập đổi sang **đa dòng** (`textMultiLine`, `maxLines=8`) + **nút Gửi** riêng
+  (vì Enter của IME xuống dòng, không submit). Gửi xong giữ focus để bàn phím
+  không tụt.
+- Workaround không cần build: gõ tiếng Việt nơi khác → copy → bấm extra-key
+  **PASTE** (nút ⎘, cũng đi qua `paste()`) → dán mượt, an toàn.
+- Hướng xa hơn (chưa làm): gửi prompt thẳng qua API `POST /api/session/{id}/prompt`
+  (schema `Session.Inbox.UserPayload { text, files }`), lấy session qua
+  `GET /api/session/active` — bỏ hẳn injection vào terminal (route đang
+  **experimental**).
+
 ### Đổi nhãn (giữ package)
 
 `TERMUX_APP_NAME` trong `app/src/main/res/values/strings.xml` và
