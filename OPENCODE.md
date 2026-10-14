@@ -20,9 +20,8 @@
 
 ## Mở app = terminal + TUI `opencode` (daemon tự cài, tự chạy)
 
-- **Launcher là `TermuxActivity`** (terminal, P3). Mở app → tự chạy TUI `opencode`
-  trong một session. Client WebView lùi về shortcut "OpenCode Web" hoặc
-  `am start` vào `OpenCodeClientActivity`.
+- **Launcher là `TermuxActivity`** (terminal). Mở app → tự chạy TUI `opencode`
+  trong một session.
 - **Lần đầu** (chưa có wrapper `$PREFIX/bin/opencode`): mở shell đăng nhập thường;
   installer chạy nền (kể cả đăng ký MCP), lần mở sau vào thẳng TUI.
 - Ngay khi `$PREFIX` (bootstrap Termux nhúng trong APK, do `TermuxActivity` sở hữu)
@@ -163,7 +162,6 @@ Ba mảnh, đều trong `com.termux.app.opencode`:
 |---|---|
 | `OpenCodeDaemon` | bọc tiến trình `opencode serve` (Android-free): chạy `serve --hostname 127.0.0.1 --port 0` (P2: thêm `--service` và đọc mật khẩu từ file trạng thái khi server không in ra), đọc stdout, parse `server listening on <url>` + `server password <pw>`; `stop()` = SIGTERM |
 | `OpenCodeDaemonService` | foreground service **sở hữu** daemon: cài đặt → chạy → wakelock + notification → restart backoff; trả `START_STICKY` |
-| `OpenCodeClientActivity` | launcher client: start/bind service, chờ `Info`, pair rồi `loadUrl` web UI |
 
 **Xác thực của client (khác P0).** Instance `serve` do app sở hữu in ra mật khẩu
 riêng, dùng qua **HTTP Basic** `opencode:<pw>`:
@@ -182,8 +180,8 @@ Khi ready: giữ `PARTIAL_WAKE_LOCK` + notification ongoing "OpenCode server"
 **Chạy thử:**
 
 ```sh
-am start -n com.termux/com.termux.app.opencode.OpenCodeClientActivity  # client web
-# mở icon app = terminal + TUI `opencode` (launcher, P3)
+am start -n com.termux/com.termux.app.TermuxActivity
+# mở icon app = terminal + TUI `opencode` (launcher)
 ```
 
 Log daemon ở `~/.opencode/daemon.log`. Từ **P2** instance này chạy thêm cờ
@@ -249,21 +247,12 @@ Kiểm chứng: `scripts/opencode-p2-proof.sh` phần **B** (chạy script trự
 
 ### P3 — terminal-first: mở app = TUI `opencode` (2026-10-14)
 
-Đảo lại trục giao diện: **terminal + TUI là đường chính**, WebView chỉ là phụ.
-
-- **Launcher** trả về `TermuxActivity`; `OpenCodeClientActivity` bỏ intent-filter
-  LAUNCHER (vẫn `exported` cho shortcut "OpenCode Web" / `am start`).
-- **Tự chạy TUI**: trong `TermuxActivity.onServiceConnected()`, khi service chưa có
-  session nào và app mở từ icon (`Intent.ACTION_MAIN`), một session chạy thẳng
-  `$PREFIX/bin/opencode` (`addNewSession(path, failsafe, name)` mới) thay vì shell
-  đăng nhập. Session chạy trong môi trường Termux đầy đủ (`TermuxShellEnvironment`).
-- **Chỉ khi CLI đã cài** (`OpenCodeSetup.isCliInstalled()` = có wrapper): lần đầu
-  chưa có wrapper → mở shell thường; installer chạy nền; lần mở sau vào thẳng TUI.
-  Cách này cũng tránh race với bước đăng ký MCP.
-- **MCP dùng chung**: logic cầu nối tool dời sang `OpenCodeMcp.ensure(context)`;
-  `OpenCodeSetup` gọi sau khi cài xong (nên TUI có tool dù chưa mở WebView),
-  `OpenCodeDaemonService` gọi khi khởi động.
-- Shortcut `opencode_terminal` → `opencode_web`.
+- **Launcher** là `TermuxActivity`; mở app → tự chạy TUI `opencode` trong một
+  session.
+- Installer chạy nền qua `OpenCodeSetup.ensureAsync()`; `OpenCodeSetup` đồng bộ
+  đăng ký MCP sau khi cài thành công để TUI có tool ngay.
+- `OpenCodeDaemonService` vẫn tồn tại để `opencode` trong terminal nối vào cùng
+  một dịch vụ nền dùng chung khi cần.
 
 Đánh đổi: dùng TUI **không** khởi động `OpenCodeDaemonService`, nên server dùng
 chung do chính CLI quản lý (`opencode serve --service` chạy nền). Khi mở client web,
