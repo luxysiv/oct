@@ -184,7 +184,11 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
 
     @Override
     public void onSingleTapUp(MotionEvent e) {
-        TerminalEmulator term = mActivity.getCurrentSession().getEmulator();
+        TerminalSession session = mActivity.getCurrentSession();
+        if (session == null) return;
+
+        TerminalEmulator term = session.getEmulator();
+        if (term == null) return;
 
         if (mActivity.getProperties().shouldOpenTerminalTranscriptURLOnClick()) {
             int[] columnAndRow = mActivity.getTerminalView().getColumnAndRow(e, true);
@@ -196,6 +200,14 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
                 ShareUtils.openUrl(mActivity, url);
                 return;
             }
+        }
+
+        // A tap on the line holding the terminal cursor is treated as a tap on the TUI's input
+        // line (OpenCode and other TUI apps keep their prompt field there). Reveal the dedicated
+        // compose field so multilingual text is entered with a full IME instead of the terminal.
+        if (!e.isFromSource(InputDevice.SOURCE_MOUSE) && mActivity.isTerminalCursorLineTap(e)) {
+            mActivity.showTerminalToolbarTextInput();
+            return;
         }
 
         if (!term.isMouseTrackingActive() && !e.isFromSource(InputDevice.SOURCE_MOUSE)) {

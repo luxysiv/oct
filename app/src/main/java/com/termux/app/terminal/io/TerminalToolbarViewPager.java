@@ -13,6 +13,7 @@ import androidx.viewpager.widget.ViewPager;
 import com.termux.R;
 import com.termux.app.TermuxActivity;
 import com.termux.shared.termux.extrakeys.ExtraKeysView;
+import com.termux.shared.view.KeyboardUtils;
 import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.TerminalView;
@@ -111,6 +112,9 @@ public class TerminalToolbarViewPager {
      *
      * <p>A carriage return is written outside the paste markers to submit the prompt. The text
      * is only cleared once it has been handed off, so a failed send does not lose it.
+     *
+     * <p>Once the text has been sent, the compose field collapses back to the extra keys page:
+     * it auto-hides after sending so the terminal reclaims the row and the IME is dismissed.
      */
     static void sendComposedText(TermuxActivity activity, EditText editText) {
         TerminalSession session = activity.getCurrentSession();
@@ -122,24 +126,29 @@ public class TerminalToolbarViewPager {
         }
 
         String text = editText.getText().toString();
-        if (text.isEmpty()) {
-            // Nothing typed: treat it as pressing Enter in the terminal.
-            session.write("\r");
-            return;
-        }
 
         TerminalView terminalView = activity.getTerminalView();
         TerminalEmulator emulator = terminalView != null ? terminalView.mEmulator : null;
-        if (emulator != null) {
+
+        if (text.isEmpty()) {
+            // Nothing typed: treat it as pressing Enter in the terminal.
+            session.write("\r");
+        } else if (emulator != null) {
             emulator.paste(text);
             session.write("\r");
         } else {
             // Fallback for when the emulator is not available yet.
             session.write(text);
         }
+
         editText.setText("");
-        // Keep the compose field focused so the IME stays up for the next prompt.
-        editText.requestFocus();
+
+        // The compose field auto-hides after sending: reveal the extra keys page again so the
+        // terminal reclaims the space and the soft keyboard is dismissed.
+        KeyboardUtils.hideSoftKeyboard(activity, editText);
+        ViewPager terminalToolbarViewPager = activity.getTerminalToolbarViewPager();
+        if (terminalToolbarViewPager != null && terminalToolbarViewPager.getCurrentItem() != 0)
+            terminalToolbarViewPager.setCurrentItem(0, true);
     }
 
 

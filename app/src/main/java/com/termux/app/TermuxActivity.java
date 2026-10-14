@@ -17,6 +17,7 @@ import android.view.ContextMenu.ContextMenuInfo;
 import android.view.Gravity;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -30,6 +31,7 @@ import android.widget.Toast;
 import com.termux.R;
 import com.termux.app.api.file.FileReceiverActivity;
 import com.termux.app.opencode.OpenCodeSetup;
+import com.termux.app.terminal.TerminalCursorLine;
 import com.termux.app.terminal.TermuxActivityRootView;
 import com.termux.app.terminal.TermuxTerminalSessionActivityClient;
 import com.termux.app.terminal.io.TermuxTerminalExtraKeys;
@@ -55,7 +57,9 @@ import com.termux.shared.termux.TermuxUtils;
 import com.termux.shared.termux.settings.properties.TermuxAppSharedProperties;
 import com.termux.shared.termux.theme.TermuxThemeUtils;
 import com.termux.shared.theme.NightMode;
+import com.termux.shared.view.KeyboardUtils;
 import com.termux.shared.view.ViewUtils;
+import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalSessionClient;
 import com.termux.view.TerminalView;
@@ -574,6 +578,50 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             // Focus the text input view if just revealed.
             findViewById(R.id.terminal_toolbar_text_input).requestFocus();
         }
+    }
+
+    /**
+     * Reveal the toolbar's compose ("chat") text input page and focus it so the soft keyboard
+     * opens for multilingual text entry. Called when the user taps the terminal's cursor line,
+     * where TUI apps such as OpenCode keep their prompt field.
+     */
+    public void showTerminalToolbarTextInput() {
+        final ViewPager terminalToolbarViewPager = getTerminalToolbarViewPager();
+        if (terminalToolbarViewPager == null) return;
+
+        if (terminalToolbarViewPager.getVisibility() != View.VISIBLE)
+            terminalToolbarViewPager.setVisibility(View.VISIBLE);
+
+        if (terminalToolbarViewPager.getCurrentItem() != 1)
+            terminalToolbarViewPager.setCurrentItem(1, true);
+
+        // Focus after layout so the compose page is instantiated before we ask for the IME.
+        terminalToolbarViewPager.post(() -> {
+            final EditText editText = findViewById(R.id.terminal_toolbar_text_input);
+            if (editText != null) {
+                editText.requestFocus();
+                KeyboardUtils.showSoftKeyboard(this, editText);
+            }
+        });
+    }
+
+    /**
+     * Whether the given terminal tap landed on the line that currently holds the terminal cursor.
+     *
+     * <p>The cursor is drawn at visual row {@code emulator.getCursorRow() - getTopRow()} (see
+     * {@link com.termux.view.TerminalRenderer#render}). TUI apps such as OpenCode keep the cursor
+     * inside their prompt field, so a tap on that row identifies a tap on the app's input line.
+     */
+    public boolean isTerminalCursorLineTap(MotionEvent e) {
+        final TerminalView terminalView = getTerminalView();
+        if (terminalView == null) return false;
+
+        final TerminalEmulator emulator = terminalView.mEmulator;
+        if (emulator == null) return false;
+
+        final int tappedRow = terminalView.getColumnAndRow(e, false)[1];
+        return TerminalCursorLine.isCursorLine(tappedRow, emulator.getCursorRow(),
+            terminalView.getTopRow(), emulator.mRows);
     }
 
     private void saveTerminalToolbarTextInput(Bundle savedInstanceState) {

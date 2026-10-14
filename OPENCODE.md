@@ -277,14 +277,31 @@ lần đầu (chưa cài) → shell rồi tự cài.
   render (mượt), newline là literal (đa dòng). Sau đó ghi `\r` ngoài marker để
   submit.
 - Ô nhập đổi sang **đa dòng** (`textMultiLine`, `maxLines=8`) + **nút Gửi** riêng
-  (vì Enter của IME xuống dòng, không submit). Gửi xong giữ focus để bàn phím
-  không tụt.
+  (vì Enter của IME xuống dòng, không submit). Gửi xong ô nhập **tự thu về trang
+  phím phụ** (xem mục dưới).
 - Workaround không cần build: gõ tiếng Việt nơi khác → copy → bấm extra-key
   **PASTE** (nút ⎘, cũng đi qua `paste()`) → dán mượt, an toàn.
 - Hướng xa hơn (chưa làm): gửi prompt thẳng qua API `POST /api/session/{id}/prompt`
   (schema `Session.Inbox.UserPayload { text, files }`), lấy session qua
   `GET /api/session/active` — bỏ hẳn injection vào terminal (route đang
   **experimental**).
+
+### Chạm dòng nhập của TUI để mở ô nhập (2026-10-14)
+
+- Trong TUI (`opencode`), con trỏ luôn nằm trong ô nhập lệnh của app. Chạm đúng
+  **dòng con trỏ** ⇒ ô nhập ("chat") tự trượt ra, **chiếm chỗ** ở đáy như trước và
+  **mở sẵn IME** (gõ được tiếng Việt); chạm chỗ khác vẫn mở bàn phím terminal như
+  thường.
+- Nhận diện "dòng nhập": `TermuxActivity.isTerminalCursorLineTap()` so **chỉ số
+  dòng** của điểm chạm (`TerminalView.getColumnAndRow(e, false)`) với dòng mà con
+  trỏ được vẽ (`emulator.getCursorRow() - TerminalView.getTopRow()`, theo
+  `TerminalRenderer.render`). Áp dụng cho **mọi phiên** terminal (không riêng
+  openTUI).
+- Sau khi **Gửi**, ô nhập **tự thu về trang phím phụ** và ẩn bàn phím
+  (`KeyboardUtils.hideSoftKeyboard` + `ViewPager.setCurrentItem(0)`); terminal lấy
+  lại dòng đã chiếm.
+- Vẫn mở/đóng tay được: **nhấn giữ** nút bàn phím (toggle toolbar) hoặc **vuốt**
+  sang trang ô nhập.
 
 ### Đổi nhãn (giữ package)
 
