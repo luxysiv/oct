@@ -51,4 +51,19 @@
             android:name="android.shortcut.conversation"/>
     </shortcut>
 
+    <!-- Terminal fallback: the app launcher opens the OpenCode client, this
+         shortcut drops straight into a Termux terminal session. -->
+    <shortcut
+        android:shortcutId="opencode_terminal"
+        android:enabled="true"
+        android:icon="@drawable/ic_new_session"
+        android:shortcutShortLabel="@string/opencode_terminal_short"
+        tools:targetApi="n_mr1">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.termux"
+            android:targetClass="com.termux.app.TermuxActivity"
+            android:name="android.shortcut.conversation"/>
+    </shortcut>
+
 </shortcuts>

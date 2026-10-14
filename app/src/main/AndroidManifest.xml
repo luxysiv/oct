@@ -60,18 +60,33 @@
             android:resizeableActivity="true"
             android:theme="@style/Theme.TermuxActivity.DayNight.NoActionBar"
             tools:targetApi="n">
-            <!-- Terminal entry point: launching the app opens the Termux
-                 terminal (terminal-first). OpenCode is installed automatically
-                 in the background (see OpenCodeSetup) and runs as the original
-                 TUI inside this terminal via the `opencode` wrapper. -->
+            <!-- Terminal host, no longer the launcher. The app opens the OpenCode
+                 client (OpenCodeClientActivity); the terminal is reached from the
+                 launcher shortcuts (long-press the app icon), from the client, or
+                 via `am start`. OpenCode itself runs as the daemon behind
+                 OpenCodeDaemonService. -->
+        </activity>
+
+        <!-- Launcher: the OpenCode client. A thin WebView window onto the daemon
+             (OpenCodeDaemonService) that renders OpenCode's own web UI. Starts
+             and binds the daemon, then pairs and loads it. -->
+        <activity
+            android:name=".app.opencode.OpenCodeClientActivity"
+            android:exported="true"
+            android:label="@string/opencode_webview_title"
+            android:configChanges="orientation|screenSize|smallestScreenSize|density|screenLayout|keyboard|keyboardHidden|navigation"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:theme="@style/Theme.TermuxActivity.DayNight.NoActionBar"
+            tools:targetApi="n">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
 
-            <!-- Published with the launcher shortcuts (long-press the app
-                 icon) even though the targets are Termux terminal sessions. -->
+            <!-- Launcher shortcuts (long-press the app icon) mostly open Termux
+                 terminal sessions. -->
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
@@ -104,6 +119,14 @@
             android:exported="true"
             android:label="@string/title_activity_termux_settings"
             android:theme="@style/Theme.TermuxApp.DayNight.NoActionBar" />
+
+        <!-- Owns the OpenCode server ("the master") as a foreground service so
+             it keeps running in the background: installs/updates the native CLI,
+             starts `opencode serve` on loopback, holds a wake lock and a
+             notification, and restarts it on exit. Not exported. -->
+        <service
+            android:name=".app.opencode.OpenCodeDaemonService"
+            android:exported="false" />
 
         <activity
             android:name=".shared.activities.ReportActivity"

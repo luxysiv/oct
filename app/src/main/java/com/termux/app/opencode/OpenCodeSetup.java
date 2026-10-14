@@ -573,7 +573,7 @@ public final class OpenCodeSetup {
     }
 
     /** Detect the npm target architecture ("arm64", "arm", "x64", "x86"). */
-    private static String deviceArch() {
+    public static String deviceArch() {
         String abi = null;
         if (Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0) {
             abi = Build.SUPPORTED_ABIS[0];
