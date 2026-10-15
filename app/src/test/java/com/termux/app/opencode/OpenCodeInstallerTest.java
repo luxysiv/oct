@@ -260,6 +260,101 @@ public class OpenCodeInstallerTest {
         assertEquals(OpenCodeInstaller.Outcome.FAILED, result.outcome);
     }
 
+    @Test
+    public void installsVersionedBinaryAndSymlinksLauncher() throws Exception {
+        http.bytes = tarBytes;
+        source.release = new OpenCodeInstaller.Release(
+            "2.0.27", "https://example.test/cli.tgz", integrityOf(tarBytes));
+
+        OpenCodeInstaller.Result result = installer().ensure(false, false);
+
+        assertEquals(OpenCodeInstaller.Outcome.INSTALLED, result.outcome);
+        // bin/opencode is only a symlink into installed/, never the patched ELF.
+        assertTrue(OpenCodeInstaller.isSymlink(paths.bin));
+        assertTrue(paths.bin.isFile());
+        File versioned = new File(paths.installedDir, "opencode-v2.0.27");
+        assertTrue(versioned.isFile());
+        assertEquals(versioned.getCanonicalPath(), paths.bin.getCanonicalPath());
+        // The (fake) patch was applied to the published build, not to a copy.
+        assertEquals(1, countInstalled());
+    }
+
+    @Test
+    public void adoptsLegacyRegularFileBinary() throws Exception {
+        // An install written by an older build: the ELF itself at bin/opencode.
+        assertTrue(paths.bin.createNewFile());
+        runner.runnable.add(paths.bin.getAbsolutePath());
+        OpenCodeInstaller.writeString(paths.versionFile, "2.0.27");
+        OpenCodeInstaller.writeString(paths.lastCheckFile, String.valueOf(System.currentTimeMillis()));
+        source.fail = true; // must not be consulted
+
+        OpenCodeInstaller.Result result = installer().ensure(false, false);
+
+        assertEquals(OpenCodeInstaller.Outcome.UP_TO_DATE, result.outcome);
+        assertTrue(OpenCodeInstaller.isSymlink(paths.bin));
+        File versioned = new File(paths.installedDir, "opencode-v2.0.27");
+        assertTrue(versioned.isFile());
+        assertEquals(versioned.getCanonicalPath(), paths.bin.getCanonicalPath());
+        assertFalse(source.called);
+    }
+
+    @Test
+    public void updateSwapsSymlinkAndKeepsPreviousBuild() throws Exception {
+        assertTrue(paths.bin.createNewFile());
+        runner.runnable.add(paths.bin.getAbsolutePath());
+        runner.versionOutput = "2.0.26";
+        OpenCodeInstaller.writeString(paths.versionFile, "2.0.26");
+        OpenCodeInstaller.writeString(paths.lastCheckFile, "0");
+        http.bytes = tarBytes;
+        source.release = new OpenCodeInstaller.Release(
+            "2.0.27", "https://example.test/cli.tgz", integrityOf(tarBytes));
+
+        OpenCodeInstaller.Result result = installer().ensure(false, false);
+
+        assertEquals(OpenCodeInstaller.Outcome.UPDATED, result.outcome);
+        File current = new File(paths.installedDir, "opencode-v2.0.27");
+        assertTrue(current.isFile());
+        assertEquals(current.getCanonicalPath(), paths.bin.getCanonicalPath());
+        // The previous build stays behind for rollback.
+        assertTrue(new File(paths.installedDir, "opencode-v2.0.26").isFile());
+    }
+
+    @Test
+    public void prunesOldBuildsKeepingNewest() throws Exception {
+        File installed = paths.installedDir;
+        assertTrue(installed.mkdirs());
+        for (String v : new String[]{"2.0.18", "2.0.20", "2.0.24"}) {
+            assertTrue(new File(installed, "opencode-v" + v).createNewFile());
+        }
+        assertTrue(paths.bin.createNewFile());
+        runner.runnable.add(paths.bin.getAbsolutePath());
+        runner.versionOutput = "2.0.24";
+        OpenCodeInstaller.writeString(paths.versionFile, "2.0.24");
+        OpenCodeInstaller.writeString(paths.lastCheckFile, "0");
+        http.bytes = tarBytes;
+        source.release = new OpenCodeInstaller.Release(
+            "2.0.27", "https://example.test/cli.tgz", integrityOf(tarBytes));
+
+        OpenCodeInstaller.Result result = installer().ensure(false, false);
+
+        assertEquals(OpenCodeInstaller.Outcome.UPDATED, result.outcome);
+        assertEquals(OpenCodeInstaller.RETAINED_VERSIONS, countInstalled());
+        assertTrue(new File(installed, "opencode-v2.0.27").isFile());
+        assertTrue(new File(installed, "opencode-v2.0.24").isFile());
+        assertTrue(new File(installed, "opencode-v2.0.20").isFile());
+        assertFalse(new File(installed, "opencode-v2.0.18").exists());
+    }
+
+    private int countInstalled() {
+        File[] kids = paths.installedDir.listFiles();
+        if (kids == null) return 0;
+        int n = 0;
+        for (File kid : kids) {
+            if (kid.isFile() && OpenCodeInstaller.Paths.versionOf(kid) != null) n++;
+        }
+        return n;
+    }
+
     // ------------------------------------------------------------------
 
     private static final class SilentProgress implements OpenCodeInstaller.Progress {

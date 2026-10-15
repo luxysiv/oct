@@ -47,7 +47,9 @@ interpreter and `execve()` returns `ENOENT`.
 - checks `$BIN` and the Termux glibc loader exist, printing a clear message
   and exiting `127` if the runtime is missing;
 - compares `$HOME/.opencode/.patched` (written by Java as `<size> <mtime>`)
-  with `stat -c '%s %Y'` of the binary. On mismatch — e.g. after
+  with `stat -L -c '%s %Y'` of the binary. `$BIN` is a symlink into
+  `~/.opencode/installed/opencode-v<version>`, so `-L` is required to dereference
+  it and compare against the real patched file. On mismatch — e.g. after
   `opencode upgrade` overwrote the patched binary — it runs the binary through
   the loader explicitly (`ld.so --library-path … "$BIN"`) instead of failing;
 - `unset LD_PRELOAD` / `LD_LIBRARY_PATH` and sets
@@ -56,6 +58,20 @@ interpreter and `execve()` returns `ENOENT`.
 The ELF interpreter must point at
 `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`; the installer patches it with
 `patchelf` and records the marker.
+
+## Versioned build layout
+
+`~/.opencode/bin/opencode` is a **symlink** to
+`~/.opencode/installed/opencode-v<version>`. Each release is patched exactly
+once and never rewritten in place; an update moves the new build into
+`installed/` and swaps the symlink with a single `rename(2)`. The newest
+`RETAINED_VERSIONS` (3) builds are kept so a bad release can be rolled back by
+pointing the symlink at the previous build. Installs from older builds (where
+the ELF itself lived at `bin/opencode`) are adopted into this layout on the next
+installer run.
+
+Creating the symlink uses `java.nio.file.Files` on Android 8+ and falls back to
+`ln` below that (`java.nio.file` does not exist before API 26).
 
 ## Version pinning
 

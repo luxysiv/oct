@@ -15,6 +15,8 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,13 +31,24 @@ import java.util.Map;
  * verify its {@code sha512} ({@code dist.integrity} from the npm registry), extract
  * only {@code package/bin/opencode} with a pure-Java tar reader, patch the ELF
  * interpreter to the Termux glibc loader with {@code patchelf}, run the freshly
- * staged binary to prove it starts, then swap it in with a same-directory rename
- * and record the version.</p>
+ * staged binary to prove it starts, then publish it and record the version.</p>
  *
- * <p>Only two external programs are executed: {@code apt-get} (as a bionic process,
- * so {@code libtermux-exec} is kept in its environment) and {@code patchelf} (as a
- * clean-env helper; {@code LD_PRELOAD}/{@code LD_LIBRARY_PATH} are dropped). Nothing
- * is written back into the ELF by hand.</p>
+ * <p><b>Versioned layout.</b> A release is patched once and kept under
+ * {@code ~/.opencode/installed/opencode-v<version>}; {@code ~/.opencode/bin/opencode}
+ * is only a symlink to the current build. An update never rewrites a patched ELF:
+ * it moves the new build into {@code installed/} and swaps the symlink with a
+ * single {@code rename(2)}. That also means the installed binary can be identified
+ * (and rolled back) from the symlink target instead of guessing from a size/mtime
+ * marker. The patch itself is still required: {@code opencode serve --service}
+ * spawns the server from {@code process.execPath}, which only resolves to the real
+ * binary when it is executed directly rather than through {@code ld.so}.</p>
+ *
+ * <p>Only two external programs are executed in the normal path: {@code apt-get}
+ * (as a bionic process, so {@code libtermux-exec} is kept in its environment) and
+ * {@code patchelf} (as a clean-env helper; {@code LD_PRELOAD}/{@code LD_LIBRARY_PATH}
+ * are dropped). On Android below 8, where {@code java.nio.file} is missing, creating
+ * the symlink falls back to {@code ln}. Nothing is written back into the ELF by
+ * hand.</p>
  *
  * <p>The class has no Android imports on purpose, so the state machine, integrity
  * check, tar reader and version comparison can all be exercised on the JVM with a
@@ -51,7 +64,10 @@ public final class OpenCodeInstaller {
      * force an already-installed wrapper to be rewritten (the old shell bootstrap
      * wrote {@code opencode-native-wrapper-vN} markers that must be replaced).
      */
-    static final String WRAPPER_MARKER = "opencode-native-wrapper-java-v3";
+    static final String WRAPPER_MARKER = "opencode-native-wrapper-java-v4";
+
+    /** How many patched builds (the newest, including the current one) to keep for rollback. */
+    static final int RETAINED_VERSIONS = 3;
 
     public enum Outcome { UP_TO_DATE, INSTALLED, UPDATED, FAILED, BUSY }
 
@@ -143,8 +159,11 @@ public final class OpenCodeInstaller {
         public final File home;
         public final File homeDir;
         public final File binDir;
+        /** Launcher path; a symlink to the current build under {@link #installedDir}. */
         public final File bin;
         public final File staged;
+        /** {@code ~/.opencode/installed}: one patched binary per version. */
+        public final File installedDir;
         public final File versionFile;
         public final File stateFile;
         public final File lockFile;
@@ -162,7 +181,7 @@ public final class OpenCodeInstaller {
         public final File pinFile;
 
         private Paths(File prefix, File home, File homeDir, File binDir, File bin, File staged,
-                      File versionFile, File stateFile, File lockFile, File tmpDir,
+                      File installedDir, File versionFile, File stateFile, File lockFile, File tmpDir,
                       File lastCheckFile, File wrapper, File glibcLib, File loader,
                       File patchelfGlibc, File patchelfBin, File aptGet,
                       File patchedFile, File pinFile) {
@@ -172,6 +191,7 @@ public final class OpenCodeInstaller {
             this.binDir = binDir;
             this.bin = bin;
             this.staged = staged;
+            this.installedDir = installedDir;
             this.versionFile = versionFile;
             this.stateFile = stateFile;
             this.lockFile = lockFile;
@@ -195,6 +215,7 @@ public final class OpenCodeInstaller {
             return new Paths(
                 prefix, home, homeDir, binDir, bin,
                 new File(binDir, "opencode.new"),
+                new File(homeDir, "installed"),
                 new File(homeDir, "version"),
                 new File(homeDir, "state"),
                 new File(homeDir, "install.lock"),
@@ -214,6 +235,31 @@ public final class OpenCodeInstaller {
             if (patchelfGlibc.isFile()) return patchelfGlibc;
             if (patchelfBin.isFile()) return patchelfBin;
             return null;
+        }
+
+        /**
+         * Where the patched build of {@code version} lives. The version is
+         * sanitised to a plain file name (dots/dashes survive, so pre-releases
+         * like {@code 2.0.0-beta.2} keep their identity).
+         */
+        File versionedBinary(String version) {
+            String v = (version == null) ? "" : version.trim();
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < v.length(); i++) {
+                char c = v.charAt(i);
+                sb.append((Character.isLetterOrDigit(c) || c == '.' || c == '-' || c == '_') ? c : '_');
+            }
+            if (sb.length() == 0) sb.append("unknown");
+            return new File(installedDir, "opencode-v" + sb);
+        }
+
+        /** The version encoded in an {@code opencode-v*} file name, or {@code null}. */
+        static String versionOf(File versioned) {
+            if (versioned == null) return null;
+            String name = versioned.getName();
+            if (!name.startsWith("opencode-v")) return null;
+            String v = name.substring("opencode-v".length());
+            return v.isEmpty() ? null : v;
         }
 
         static String loaderName(String arch) {
@@ -306,14 +352,22 @@ public final class OpenCodeInstaller {
     }
 
     private Result runLocked(boolean reinstall, boolean update) {
-        String current = installedVersion();
-        boolean binOk = verifyDirect(paths.bin);
-
         // The launcher and terminal integration are owned by Java now: refresh the
         // wrapper and drop any legacy profile.d shell bootstrap on every run,
         // including the up-to-date fast path.
         removeLegacyBootstrap();
         ensureWrapper();
+
+        // Installs made by older builds kept the patched ELF at bin/opencode
+        // itself. Adopt it: the binary moves into installed/ and a symlink takes
+        // its place, so from now on an update only ever moves the symlink and the
+        // patched file is never rewritten in place.
+        String current = installedVersion();
+        adoptLegacyInstall(current);
+
+        // Track what is really installed: the binary runs directly only when its
+        // ELF interpreter is still the glibc loader we patched.
+        boolean binOk = verifyDirect(paths.bin);
 
         // Keep the launcher's "this binary is patched" marker in sync whenever
         // the installed binary really runs directly. This heals the marker if
@@ -397,7 +451,7 @@ public final class OpenCodeInstaller {
             if (!configure(paths.staged)) {
                 return failWithSdkHint("Không cấu hình được OpenCode để chạy trực tiếp.");
             }
-            if (!installStaged()) {
+            if (!installStaged(release.version)) {
                 return fail("Không cài đặt được binary mới.");
             }
 
@@ -565,18 +619,161 @@ public final class OpenCodeInstaller {
     // ------------------------------------------------------------------
 
     /**
-     * Move the verified staged binary into place with a single same-directory
-     * rename. {@code rename(2)} replaces the destination atomically, so a crash
-     * mid-swap can never leave the launcher with no binary at all (the old code
-     * renamed {@code bin} to {@code bin.old} first, leaving exactly that window).
+     * Publish the verified staged binary as the build for {@code version} and
+     * point {@code bin/opencode} at it.
+     *
+     * <p>The staged file is moved (not copied) into
+     * {@code ~/.opencode/installed/opencode-v<version>}, keeping the exact ELF we
+     * just patched and verified. The launcher path itself is only ever a symlink,
+     * swapped in with a same-directory {@code rename(2)}, so a crash mid-swap can
+     * never leave the launcher with no binary at all and the patched build stays
+     * intact even if an update is interrupted.</p>
      */
-    private boolean installStaged() {
+    private boolean installStaged(String version) {
         if (!paths.staged.isFile()) return false;
-        if (!paths.staged.renameTo(paths.bin)) {
+        if (!paths.installedDir.isDirectory() && !paths.installedDir.mkdirs()) {
+            log("could not create " + paths.installedDir);
+            return false;
+        }
+        File versioned = paths.versionedBinary(version);
+        delete(versioned); // re-install of the same version
+        if (!paths.staged.renameTo(versioned)) {
             log("could not move staged binary into place");
             return false;
         }
+        setExecutable(versioned);
+        if (!pointBinAt(versioned)) return false;
+        pruneInstalled(versioned);
         return true;
+    }
+
+    /**
+     * Adopt an install from a build that kept the patched ELF at {@code bin/opencode}
+     * itself: move the binary into {@code installed/} under its version and leave a
+     * symlink in its place. Best-effort — if anything fails the legacy layout is
+     * put back and the next update replaces {@code bin/opencode} directly.
+     */
+    private void adoptLegacyInstall(String version) {
+        File bin = paths.bin;
+        if (bin == null || !bin.isFile() || isSymlink(bin)) return;
+        if (!paths.installedDir.isDirectory() && !paths.installedDir.mkdirs()) {
+            log("could not create " + paths.installedDir + "; keeping the binary in place");
+            return;
+        }
+        String stamp = (version != null && !version.isEmpty())
+            ? version : "unknown-" + System.nanoTime();
+        File versioned = paths.versionedBinary(stamp);
+        delete(versioned);
+        if (!bin.renameTo(versioned)) {
+            log("could not adopt the installed binary; keeping it in place");
+            return;
+        }
+        if (!pointBinAt(versioned)) {
+            if (!versioned.renameTo(bin)) log("could not restore " + bin.getAbsolutePath());
+            log("could not link " + bin.getAbsolutePath() + " to " + versioned.getName());
+            return;
+        }
+        log("adopted the installed binary as " + versioned.getName());
+    }
+
+    /**
+     * Make {@code ~/.opencode/bin/opencode} point at {@code target} atomically.
+     *
+     * <p>The new link is created next to the destination and renamed over it, a
+     * single {@code rename(2)}: a reader sees the old target or the new one, never
+     * a missing path.</p>
+     */
+    private boolean pointBinAt(File target) {
+        File tmp = new File(paths.binDir, "opencode.link.new");
+        delete(tmp);
+        if (!createSymlink(tmp, target)) {
+            log("could not create symlink " + tmp + " -> " + target);
+            delete(tmp);
+            return false;
+        }
+        if (tmp.renameTo(paths.bin)) return true;
+        // rename(2) normally replaces the old symlink; if the filesystem refuses,
+        // drop the old link and try once more.
+        delete(paths.bin);
+        if (tmp.renameTo(paths.bin)) return true;
+        log("could not move symlink into place");
+        delete(tmp);
+        return false;
+    }
+
+    /**
+     * Create {@code link} as a symlink to {@code target}.
+     *
+     * <p>{@code java.nio.file.Files} only exists from Android 8 (API 26) on, so it
+     * is reached reflectively; on older devices the {@code ln} binary is used.</p>
+     */
+    private boolean createSymlink(File link, File target) {
+        if (createSymlinkNio(link, target)) return true;
+        File ln = new File(paths.prefix, "bin/ln");
+        if (!ln.isFile()) ln = new File("/system/bin/ln");
+        return run(Arrays.asList(ln.getAbsolutePath(), "-s", target.getAbsolutePath(),
+            link.getAbsolutePath()), paths.home, cleanEnv());
+    }
+
+    /**
+     * {@code Files.createSymbolicLink} without a compile-time reference to
+     * {@code java.nio.file} (and to {@code File.toPath}), which are absent below
+     * API 26. Returns {@code false} when unavailable or on any failure.
+     */
+    static boolean createSymlinkNio(File link, File target) {
+        try {
+            Class<?> filesClass = Class.forName("java.nio.file.Files");
+            Class<?> pathClass = Class.forName("java.nio.file.Path");
+            Class<?> attrClass = Class.forName("java.nio.file.attribute.FileAttribute");
+            Object attrs = java.lang.reflect.Array.newInstance(attrClass, 0);
+            java.lang.reflect.Method toPath = File.class.getMethod("toPath");
+            java.lang.reflect.Method create = filesClass.getMethod("createSymbolicLink",
+                pathClass, pathClass, attrs.getClass());
+            create.invoke(null, toPath.invoke(link), toPath.invoke(target), attrs);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** True when {@code f} is a symbolic link (works without {@code java.nio.file}). */
+    static boolean isSymlink(File f) {
+        if (f == null) return false;
+        try {
+            File parent = f.getParentFile();
+            File absolute = (parent == null) ? f : new File(parent.getCanonicalFile(), f.getName());
+            return !absolute.getCanonicalFile().equals(absolute.getAbsoluteFile());
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Drop old patched builds, keeping the newest {@link #RETAINED_VERSIONS}
+     * (the current one plus the newest others) so a bad update can be rolled back
+     * by pointing the symlink at the previous build. Best-effort: a file that
+     * cannot be deleted simply stays.
+     */
+    private void pruneInstalled(File current) {
+        File[] kids = paths.installedDir.listFiles();
+        if (kids == null) return;
+        List<File> rest = new ArrayList<>();
+        for (File kid : kids) {
+            if (kid.isFile() && !kid.equals(current) && Paths.versionOf(kid) != null) rest.add(kid);
+        }
+        if (rest.size() <= RETAINED_VERSIONS - 1) return;
+        Collections.sort(rest, new Comparator<File>() {
+            @Override
+            public int compare(File a, File b) {
+                int c = OpenCodeSemVer.compare(Paths.versionOf(a), Paths.versionOf(b));
+                return (c != 0) ? -c : a.getName().compareTo(b.getName());
+            }
+        });
+        for (int i = RETAINED_VERSIONS - 1; i < rest.size(); i++) {
+            File old = rest.get(i);
+            if (old.delete()) log("removed old build " + old.getName());
+            else log("could not remove old build " + old.getAbsolutePath());
+        }
     }
 
     /**
@@ -605,11 +802,13 @@ public final class OpenCodeInstaller {
      * this branch: a bare interactive call (or any argument) simply execs the
      * patched binary so the original TUI runs in the terminal.
      *
-     * <p>The launcher is also the first line of self-defence: {@code opencode
-     * upgrade} (or a glibc update) can leave a binary whose ELF interpreter is
-     * no longer the Termux glibc loader. Rather than failing with a cryptic
-     * error it falls back to invoking the loader explicitly, which works for
-     * both patched and unpatched binaries.</p>
+     * <p>{@code $BIN} is a symlink into {@code ~/.opencode/installed}; the
+     * launcher's marker check therefore dereferences it ({@code stat -L}) to
+     * compare against the real patched file. The launcher is also the first line
+     * of self-defence: {@code opencode upgrade} (or a glibc update) can leave a
+     * binary whose ELF interpreter is no longer the Termux glibc loader. Rather
+     * than failing with a cryptic error it falls back to invoking the loader
+     * explicitly, which works for both patched and unpatched binaries.</p>
      *
      * <p>The file is run by {@code dash} (Termux's {@code /bin/sh}), so the
      * script sticks to POSIX shell.</p>
@@ -647,10 +846,12 @@ public final class OpenCodeInstaller {
         sb.append("fi\n");
         sb.append("\n");
         sb.append("# The marker records \"<size> <mtime>\" of the binary whose interpreter we\n");
-        sb.append("# patched. `opencode upgrade` (or a glibc update) can overwrite it; then a\n");
-        sb.append("# bare exec dies with a confusing error, so invoke the loader explicitly.\n");
+        sb.append("# patched. `-L` follows $BIN, which is a symlink to the current build\n");
+        sb.append("# under ~/.opencode/installed. `opencode upgrade` (or a glibc update) can\n");
+        sb.append("# overwrite it; then a bare exec dies with a confusing error, so invoke the\n");
+        sb.append("# loader explicitly.\n");
         sb.append("MARK=$(\"$CAT\" \"$PATCHED\" 2>/dev/null)\n");
-        sb.append("NOW=$(\"$STAT\" -c '%s %Y' \"$BIN\" 2>/dev/null)\n");
+        sb.append("NOW=$(\"$STAT\" -L -c '%s %Y' \"$BIN\" 2>/dev/null)\n");
         sb.append("if [ -z \"$MARK\" ] || [ \"$MARK\" != \"$NOW\" ]; then\n");
         sb.append("  echo \"opencode: binary chưa được vá — chạy tạm qua loader; mở lại app Termux để vá lại.\" >&2\n");
         sb.append("  export OPENCODE_DISABLE_AUTOUPDATE=1\n");
@@ -671,7 +872,9 @@ public final class OpenCodeInstaller {
     /**
      * Record {@code <size> <mtime-in-seconds>} of the binary that currently runs
      * directly, so the launcher can tell whether it is still the build we
-     * patched. Mirrors {@code stat -c '%s %Y'} in {@link #wrapperScript()}.
+     * patched. {@code File.length()}/{@code lastModified()} follow the
+     * {@code bin/opencode} symlink, mirroring {@code stat -L -c '%s %Y'} in
+     * {@link #wrapperScript()}.
      */
     private void writePatchedMarker() {
         File bin = paths.bin;

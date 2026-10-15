@@ -53,11 +53,31 @@ trên `~/.opencode/install.lock`) nên không chạy trùng:
    trong môi trường sạch (`LD_PRELOAD`/`LD_LIBRARY_PATH` bị bỏ). **Chỉ đổi
    interpreter, không `--set-rpath`** (đổi rpath segfault binary bun).
 7. **Chạy thử** `opencode.new --version`; chỉ khi chạy **trực tiếp** được mới
-   **rename đè nguyên tử** (`.new` → `opencode`, giữ `.old` để rollback) và ghi
-   `~/.opencode/version`.
-8. Luôn ghi/ghi-đè wrapper `$PREFIX/bin/opencode` (marker `opencode-native-wrapper-java-v1`).
+   **publish**: chuyển `.new` vào `~/.opencode/installed/opencode-v<version>`
+   (binary đã vá chỉ được ghi **một lần**, không bao giờ bị vá đè tại chỗ) rồi
+   `rename(2)` symlink `~/.opencode/bin/opencode` trỏ sang build mới (swap
+   nguyên tử). Ghi `~/.opencode/version`; giữ 3 build mới nhất để rollback.
+8. Luôn ghi/ghi-đè wrapper `$PREFIX/bin/opencode` (marker `opencode-native-wrapper-java-v4`).
    Wrapper `exec` trực tiếp binary đã patch: `unset LD_PRELOAD LD_LIBRARY_PATH;
    export OPENCODE_DISABLE_AUTOUPDATE=1; exec "$BIN" "$@"`.
+
+### Theo dõi build đã cài (layout có phiên bản, 2026-10-15)
+
+Trước đây `~/.opencode/bin/opencode` **là** binary đã vá và marker `.patched`
+(`<size> <mtime>`) là cách duy nhất để biết nó còn đúng build ta vá hay không —
+một heuristic dễ vỡ (mtime/size trùng hợp, file bị ghi đè…). Từ bản này:
+
+- Mỗi release được vá **một lần** và lưu ở `~/.opencode/installed/opencode-v<version>`;
+  `~/.opencode/bin/opencode` chỉ là **symlink** trỏ tới build hiện tại.
+- Update **chỉ đổi symlink** (một `rename(2)`), không bao giờ ghi đè file ELF đã vá.
+  Vì vậy build đang chạy được **theo dõi bằng chính symlink target**, không phải
+  đoán qua marker.
+- Cài đặt cũ (binary là file thường) được **adopt** một lần: chuyển vào
+  `installed/` và thay bằng symlink.
+- Giữ **3** build mới nhất trong `installed/` để rollback (`RETAINED_VERSIONS`).
+- Marker `.patched` vẫn còn như **lớp tự vệ thứ hai** của wrapper, giờ so bằng
+  `stat -L` (theo symlink) khớp với cách Java ghi (`File.length()`/`lastModified()`).
+  Lệch ⇒ wrapper chạy tạm qua loader kèm cảnh báo (nhánh này gần như không còn xảy ra).
 
 ### Vì sao cần patch interpreter
 
@@ -119,7 +139,9 @@ Rồi chạy `termux-reload-settings`.
 | `~/.opencode/last-update-check` | mốc check cache (TTL 24h) |
 | `~/.opencode/install.lock` | khoá chống chạy trùng installer |
 | `~/.opencode/reinstall` | marker ép cài lại ở lần mở app kế tiếp |
-| `~/.opencode/bin/opencode` | binary đã patch |
+| `~/.opencode/bin/opencode` | symlink tới build hiện tại trong `installed/` |
+| `~/.opencode/installed/opencode-v<version>` | binary đã vá của từng phiên bản (giữ 3 bản mới nhất) |
+| `~/.opencode/.patched` | `<size> <mtime>` của build đang chạy (lớp tự vệ của wrapper) |
 | `~/.opencode/bin/termux-api-mcp.sh` | MCP stdio server cầu nối tool `termux-api` (P2) |
 | `~/.config/opencode/opencode.json` | config OpenCode toàn cục; chứa đăng ký MCP `termux-api` (P2) |
 | `~/.local/state/opencode/service.json` | đăng ký dịch vụ nền dùng chung (`serve --service` ghi) |
@@ -349,9 +371,9 @@ Rà soát 5 điểm gãy khi `opencode upgrade` / cập nhật glibc ghi đè ru
    đã bị ghi đè — kèm cảnh báo bảo mở app để vá lại; khớp ⇒ `exec "$BIN"`.
 2. **Kiểm tra loader**: thiếu `$PREFIX/glibc/lib/ld-linux-aarch64.so.1` ⇒ thoát
    `127` kèm thông báo thay vì lỗi "not found" khó hiểu.
-3. **Đổi binary 1 bước nguyên tử**: `installStaged()` chỉ còn một
-   `renameTo(staged, bin)` (bỏ `bin → bin.old` trước đó, từng để lộ khoảng không
-   có binary nếu tiến trình chết giữa chừng).
+3. **Đổi binary 1 bước nguyên tử**: binary được vá vào `installed/opencode-v<version>`
+   rồi `bin/opencode` (symlink) được swap bằng `rename(2)` — không có khoảng không
+   binary, và ELF đã vá không bao giờ bị ghi đè tại chỗ (xem mục "Theo dõi build đã cài").
 4. **`.patched` + `opencode service restart`**: sau khi thay binary, Java ghi lại
    `.patched` và (khi đây là **update**, tức bản cũ chạy được) gọi
    `opencode service restart` best-effort để dịch vụ nền không phục vụ bản cũ.
