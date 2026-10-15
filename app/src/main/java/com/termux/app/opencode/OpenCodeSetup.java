@@ -106,6 +106,29 @@ public final class OpenCodeSetup {
         return CLI_WRAPPER_FILE.getAbsolutePath();
     }
 
+    /** Absolute path of an interactive shell used to wrap the auto-launched TUI. */
+    public static String shellPath() {
+        File bash = new File(PREFIX_DIR, "bin/bash");
+        if (bash.isFile()) return bash.getAbsolutePath();
+        return new File(PREFIX_DIR, "bin/sh").getAbsolutePath();
+    }
+
+    /**
+     * Arguments for a login shell that runs the {@code opencode} TUI and then
+     * falls back to an interactive prompt in the <em>same</em> session.
+     *
+     * <p>The app used to run the CLI launcher as the session's main process, so
+     * quitting the TUI (Ctrl+C, {@code /exit}, a crash) ended the session and,
+     * with it being the only session, closed the app. Wrapping the TUI in a
+     * shell keeps the session alive: when the TUI exits the user lands back on
+     * a shell prompt instead of being dropped out to the Android launcher.</p>
+     */
+    public static String[] tuiLaunchArguments() {
+        String shell = shellPath();
+        String script = "\"" + cliWrapperPath() + "\"; exec \"" + shell + "\" -l";
+        return new String[]{"-l", "-c", script};
+    }
+
     /** States that represent real (potentially slow) install work. */
     private static final java.util.Set<String> WORK_STATES = new java.util.HashSet<>(java.util.Arrays.asList(
         "deps", "download", "configure"));

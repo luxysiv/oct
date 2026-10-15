@@ -416,8 +416,13 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                         boolean fromLauncher = !mIsActivityRecreated
                             && (action == null || Intent.ACTION_MAIN.equals(action));
                         if (fromLauncher && !launchFailsafe && OpenCodeSetup.isCliInstalled()) {
+                            // Run the TUI inside a login shell so quitting it
+                            // (Ctrl+C / /exit / crash) drops back to a shell
+                            // prompt in the same session instead of ending the
+                            // session and closing the app.
                             mTermuxTerminalSessionActivityClient.addNewSession(
-                                OpenCodeSetup.cliWrapperPath(), launchFailsafe, "opencode");
+                                OpenCodeSetup.shellPath(), OpenCodeSetup.tuiLaunchArguments(),
+                                launchFailsafe, "opencode");
                         } else {
                             mTermuxTerminalSessionActivityClient.addNewSession(launchFailsafe, null);
                         }

@@ -365,12 +365,18 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
         addNewSession(null, isFailSafe, sessionName);
     }
 
+    /** Add a new {@link TermuxSession} running {@code executablePath} (or a login shell when {@code null}). */
+    public void addNewSession(String executablePath, boolean isFailSafe, String sessionName) {
+        addNewSession(executablePath, null, isFailSafe, sessionName);
+    }
+
     /**
      * Add a new {@link TermuxSession}. When {@code executablePath} is
      * {@code null} a normal login shell is started; otherwise the given
-     * executable runs directly (e.g. the {@code opencode} TUI).
+     * executable runs with {@code arguments} (e.g. a shell that auto-runs the
+     * {@code opencode} TUI and then drops back to an interactive prompt).
      */
-    public void addNewSession(String executablePath, boolean isFailSafe, String sessionName) {
+    public void addNewSession(String executablePath, String[] arguments, boolean isFailSafe, String sessionName) {
         TermuxService service = mActivity.getTermuxService();
         if (service == null) return;
 
@@ -387,7 +393,7 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
                 workingDirectory = currentSession.getCwd();
             }
 
-            TermuxSession newTermuxSession = service.createTermuxSession(executablePath, null, null, workingDirectory, isFailSafe, sessionName);
+            TermuxSession newTermuxSession = service.createTermuxSession(executablePath, arguments, null, workingDirectory, isFailSafe, sessionName);
             if (newTermuxSession == null) return;
 
             TerminalSession newTerminalSession = newTermuxSession.getTerminalSession();
