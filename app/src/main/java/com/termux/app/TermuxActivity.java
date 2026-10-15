@@ -595,14 +595,46 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (terminalToolbarViewPager.getCurrentItem() != 1)
             terminalToolbarViewPager.setCurrentItem(1, true);
 
-        // Focus after layout so the compose page is instantiated before we ask for the IME.
-        terminalToolbarViewPager.post(() -> {
-            final EditText editText = findViewById(R.id.terminal_toolbar_text_input);
-            if (editText != null) {
-                editText.requestFocus();
-                KeyboardUtils.showSoftKeyboard(this, editText);
+        focusTerminalToolbarTextInput();
+    }
+
+    /**
+     * Focus the compose field and open the IME for it, waiting for layout when the compose page
+     * is not built yet.
+     *
+     * <p>Page 1 of the toolbar is only instantiated during the ViewPager's first layout pass, so
+     * when the toolbar was hidden ({@link View#GONE}) the field does not exist yet at call time.
+     * Without the layout fallback the request silently did nothing and the tap on the terminal
+     * input line appeared to be ignored.
+     */
+    private void focusTerminalToolbarTextInput() {
+        final ViewPager terminalToolbarViewPager = getTerminalToolbarViewPager();
+        if (terminalToolbarViewPager == null) return;
+
+        if (focusTerminalToolbarTextInputNow(terminalToolbarViewPager)) return;
+
+        // The field is not ready yet: do it once the compose page has been laid out, then drop the
+        // listener so it can never steal focus back at some later, unrelated layout change.
+        terminalToolbarViewPager.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int left, int top, int right, int bottom,
+                                       int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                v.removeOnLayoutChangeListener(this);
+                focusTerminalToolbarTextInputNow((ViewPager) v);
             }
         });
+    }
+
+    /** Focus the compose field if it is built, else return false. Opens the IME when it succeeds. */
+    private boolean focusTerminalToolbarTextInputNow(ViewPager terminalToolbarViewPager) {
+        if (terminalToolbarViewPager.getVisibility() != View.VISIBLE) return false;
+        if (terminalToolbarViewPager.getCurrentItem() != 1) return false;
+
+        final EditText editText = terminalToolbarViewPager.findViewById(R.id.terminal_toolbar_text_input);
+        if (editText == null || !editText.requestFocus()) return false;
+
+        KeyboardUtils.showSoftKeyboard(this, editText);
+        return true;
     }
 
     /**

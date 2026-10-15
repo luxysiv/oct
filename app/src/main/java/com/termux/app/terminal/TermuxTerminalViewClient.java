@@ -182,6 +182,31 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
 
 
 
+    /**
+     * Reveal the toolbar compose field when the tap lands on the terminal's input line.
+     *
+     * <p>This runs synchronously with the tap's up event on purpose. The delayed, double tap aware
+     * {@link #onSingleTapUp(MotionEvent)} used to do this, which made the switch from the TUI's own
+     * input to the compose field unreliable: the callback is skipped entirely when the tap turns
+     * out to be a double tap (users tap twice when the first tap seems unresponsive), and it runs
+     * only after the double tap timeout, by which time the tap had already been forwarded to the
+     * TUI as a mouse click - the TUI could move its cursor, redraw or scroll in between, so the
+     * cursor row no longer matched the tapped row and nothing happened.
+     */
+    @Override
+    public boolean onSingleTapUpImmediate(MotionEvent e) {
+        if (e.isFromSource(InputDevice.SOURCE_MOUSE)) return false;
+
+        // Leave taps alone while the transcript URL mode decides for itself on the confirmed tap,
+        // so that a double tap on a link is never mistaken for opening the compose field.
+        if (mActivity.getProperties().shouldOpenTerminalTranscriptURLOnClick()) return false;
+
+        if (!mActivity.isTerminalCursorLineTap(e)) return false;
+
+        mActivity.showTerminalToolbarTextInput();
+        return true;
+    }
+
     @Override
     public void onSingleTapUp(MotionEvent e) {
         TerminalSession session = mActivity.getCurrentSession();
@@ -200,14 +225,6 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
                 ShareUtils.openUrl(mActivity, url);
                 return;
             }
-        }
-
-        // A tap on the line holding the terminal cursor is treated as a tap on the TUI's input
-        // line (OpenCode and other TUI apps keep their prompt field there). Reveal the dedicated
-        // compose field so multilingual text is entered with a full IME instead of the terminal.
-        if (!e.isFromSource(InputDevice.SOURCE_MOUSE) && mActivity.isTerminalCursorLineTap(e)) {
-            mActivity.showTerminalToolbarTextInput();
-            return;
         }
 
         if (!term.isMouseTrackingActive() && !e.isFromSource(InputDevice.SOURCE_MOUSE)) {

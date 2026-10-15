@@ -139,9 +139,20 @@ public final class TerminalView extends View {
 
             boolean scrolledWithFinger;
 
+            /** Down time of a tap the client already handled immediately, or -1 if none. */
+            long mHandledTapDownTime = -1;
+
             @Override
             public boolean onUp(MotionEvent event) {
                 mScrollRemainder = 0.0f;
+                if (event.getDownTime() == mHandledTapDownTime) {
+                    // The client consumed this tap itself in onSingleTapUpImmediate() (e.g. it
+                    // revealed its compose field on the terminal input line). Do not also report
+                    // the tap to the terminal as a mouse click, since the app being tapped could
+                    // then move its cursor or redraw before the client's decision is applied.
+                    scrolledWithFinger = false;
+                    return true;
+                }
                 if (mEmulator != null && mEmulator.isMouseTrackingActive() && !event.isFromSource(InputDevice.SOURCE_MOUSE) && !isSelectingText() && !scrolledWithFinger) {
                     // Quick event processing when mouse tracking is active - do not wait for check of double tapping
                     // for zooming.
@@ -154,7 +165,28 @@ public final class TerminalView extends View {
             }
 
             @Override
+            public boolean onSingleTapUpImmediate(MotionEvent event) {
+                mHandledTapDownTime = -1;
+                if (mEmulator == null || isSelectingText()) return false;
+
+                if (!mClient.onSingleTapUpImmediate(event)) return false;
+
+                // Remember the tap so that onUp() does not report it as a mouse click and the
+                // delayed onSingleTapUp() below does not run its default handling for it.
+                mHandledTapDownTime = event.getDownTime();
+                return true;
+            }
+
+            @Override
             public boolean onSingleTapUp(MotionEvent event) {
+                if (event.getDownTime() == mHandledTapDownTime) {
+                    // This tap was already handled by onSingleTapUpImmediate(). Running the default
+                    // handling for it now would requestFocus() the terminal and steal the focus
+                    // (and with it the IME) back from the view the client focused for that tap.
+                    mHandledTapDownTime = -1;
+                    return true;
+                }
+
                 if (mEmulator == null) return true;
 
                 if (isSelectingText()) {

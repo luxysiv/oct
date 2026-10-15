@@ -25,8 +25,22 @@ public interface TerminalViewClient {
 
     /**
      * On a single tap on the terminal if terminal mouse reporting not enabled.
+     *
+     * <p>Reported only once the tap is confirmed, i.e. after the double tap timeout and never when
+     * the tap turns out to be the first half of a double tap.
      */
     void onSingleTapUp(MotionEvent e);
+
+    /**
+     * On a single tap on the terminal, reported synchronously with the tap's up event - before the
+     * gesture can be reclassified as a double tap and before the tap is reported to the terminal
+     * as a mouse click. The terminal state read here is still the state the finger saw.
+     *
+     * <p>Return true to consume the tap: the terminal will not get a mouse click for it and
+     * {@link #onSingleTapUp(MotionEvent)} will not run its default handling for it either, so a
+     * view focused by this callback keeps the input focus.
+     */
+    boolean onSingleTapUpImmediate(MotionEvent e);
 
     boolean shouldBackButtonBeMappedToEscape();
 

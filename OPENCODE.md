@@ -303,6 +303,34 @@ lần đầu (chưa cài) → shell rồi tự cài.
 - Vẫn mở/đóng tay được: **nhấn giữ** nút bàn phím (toggle toolbar) hoặc **vuốt**
   sang trang ô nhập.
 
+### Chạm dòng nhập: nhận diện tức thời, hết "khi được khi không" (2026-10-15)
+
+Trước đây chạm dòng nhập chỉ **khi được khi không**. Ba nguyên nhân, đã sửa:
+
+1. **Callback muộn và có thể bị bỏ hẳn.** `TermuxTerminalViewClient.onSingleTapUp`
+   được nối vào `GestureDetector.onSingleTapConfirmed` — chỉ chạy **sau**
+   double-tap timeout (~300 ms) và **không chạy** khi tap hoá ra là nửa đầu của
+   double tap (người dùng bấm hai lần vì lần đầu có vẻ "không ăn"). Đã thêm hook
+   **tức thời** `TerminalViewClient.onSingleTapUpImmediate()`, nối vào
+   `SimpleOnGestureListener.onSingleTapUp` (bắn ngay ở ACTION_UP); nhận diện dòng
+   nhập chuyển hẳn sang hook này nên **luôn chạy**, kể cả khi bị đọc thành double
+   tap. Callback muộn vẫn giữ URL-on-tap + bật bàn phím terminal như cũ.
+2. **Đọc hình học muộn → lệch dòng.** Bản cũ so dòng ở callback muộn; lúc đó tap đã
+   bị `TerminalView.onUp` gửi cho TUI dưới dạng **mouse click** (TUI `opencode` bật
+   mouse reporting) nên TUI có thể đã đổi vị trí con trỏ / cuộn / vẽ lại, cộng thêm
+   IME có thể đã resize view → `isTerminalCursorLineTap()` so nhầm dòng. Giờ so
+   **ngay tại ACTION_UP** (trước `onUp`) nên hình học vẫn đúng như lúc ngón tay
+   chạm. Khi hook tức thời đã xử lý tap: `onUp` **không** gửi click cho terminal
+   nữa, và callback muộn của tap đó **bị bỏ qua** — tránh `requestFocus()` của
+   terminal **giật lại focus** (kèm IME) từ ô nhập vừa hiện.
+3. **Toolbar đang ẩn thì ô nhập chưa tồn tại.** `ViewPager` chỉ dựng page 1 trong
+   layout pass, nên khi toolbar `GONE` thì `findViewById(...)` trả `null` → không
+   focus được gì (tap "bị nuốt" im lặng). `focusTerminalToolbarTextInput()` giờ
+   chờ layout (`addOnLayoutChangeListener`) để focus + mở IME.
+
+Phần ánh xạ dòng vẫn là `TerminalCursorLine.isCursorLine(...)` (có unit test); chỉ
+đổi **thời điểm** lấy mẫu, không đổi công thức.
+
 ### Đổi nhãn (giữ package)
 
 `TERMUX_APP_NAME` trong `app/src/main/res/values/strings.xml` và

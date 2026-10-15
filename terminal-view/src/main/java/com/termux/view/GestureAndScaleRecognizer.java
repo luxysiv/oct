@@ -9,7 +9,21 @@ import android.view.ScaleGestureDetector;
 final class GestureAndScaleRecognizer {
 
     public interface Listener {
+
+        /**
+         * Notified when a tap was confirmed, i.e. it was not followed by a second tap within the
+         * double tap timeout. Note that this is reported with a delay and is not reported at all
+         * when the tap turns out to be the first half of a double tap.
+         */
         boolean onSingleTapUp(MotionEvent e);
+
+        /**
+         * Notified synchronously when a tap's up event is dispatched, i.e. before the gesture can
+         * be reclassified as a double tap and before {@link Listener#onUp}. Terminal state read
+         * here is still the state the finger saw, which makes it the right place for decisions
+         * that must not race with the app being tapped reacting to the tap.
+         */
+        boolean onSingleTapUpImmediate(MotionEvent e);
 
         boolean onDoubleTap(MotionEvent e);
 
@@ -35,6 +49,11 @@ final class GestureAndScaleRecognizer {
         mListener = listener;
 
         mGestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onSingleTapUp(MotionEvent e) {
+                return mListener.onSingleTapUpImmediate(e);
+            }
+
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
                 return mListener.onScroll(e2, dx, dy);
