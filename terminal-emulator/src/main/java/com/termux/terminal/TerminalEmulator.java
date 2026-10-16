@@ -218,6 +218,20 @@ public final class TerminalEmulator {
     /** The cursor position. Between (0,0) and (mRows-1, mColumns-1). */
     private int mCursorRow, mCursorCol;
 
+    /**
+     * The cursor position the running application last declared with DECSET 25 ("show cursor"),
+     * i.e. the destination of the last {@code ESC[<row>;<col>H ESC[?25h} pair, or -1 when unknown.
+     *
+     * <p>Full-screen TUI apps (OpenCode's OpenTUI among them) hide the cursor while repainting the
+     * screen, park it on their input caret and then show it, so this is the app's own answer to
+     * "where is my caret". It is a more reliable caret locator than {@link #getCursorRow()}: the
+     * live row is swept across the whole screen while such an app redraws, and a resize moves it
+     * during reflow.</p>
+     */
+    private int mDeclaredCursorRow = -1, mDeclaredCursorCol = -1;
+    /** Terminal size when {@link #mDeclaredCursorRow} was recorded, to detect a stale value. */
+    private int mDeclaredCursorRows = -1, mDeclaredCursorColumns = -1;
+
     /** The number of character rows and columns in the terminal screen. */
     public int mRows, mColumns;
 
@@ -615,6 +629,34 @@ public final class TerminalEmulator {
 
     public int getCursorCol() {
         return mCursorCol;
+    }
+
+    /**
+     * Row (0-based) the running application last declared as its cursor with DECSET 25
+     * ("show cursor"), or -1 when unknown.
+     *
+     * <p>Unlike {@link #getCursorRow()} this is not a mid-redraw artefact: a full-screen app hides
+     * the cursor while repainting, parks it on its input caret and shows it again, so the last
+     * shown position is where the app's caret is. The value is discarded (this returns -1) when
+     * the terminal was resized since it was recorded, because the row then refers to the old
+     * geometry; the app re-declares it on its next repaint.</p>
+     */
+    public int getDeclaredCursorRow() {
+        if (mDeclaredCursorRow < 0) return -1;
+        if (mDeclaredCursorRows != mRows || mDeclaredCursorColumns != mColumns) return -1;
+        return mDeclaredCursorRow;
+    }
+
+    /** Column (0-based) of {@link #getDeclaredCursorRow()}, or -1 under the same rules. */
+    public int getDeclaredCursorCol() {
+        if (mDeclaredCursorCol < 0) return -1;
+        if (mDeclaredCursorRows != mRows || mDeclaredCursorColumns != mColumns) return -1;
+        return mDeclaredCursorCol;
+    }
+
+    private void clearDeclaredCursor() {
+        mDeclaredCursorRow = mDeclaredCursorCol = -1;
+        mDeclaredCursorRows = mDeclaredCursorColumns = -1;
     }
 
     /** Get the terminal cursor style. It will be one of {@link #TERMINAL_CURSOR_STYLES_LIST} */
@@ -1819,6 +1861,15 @@ public final class TerminalEmulator {
             case 9: // X10 mouse reporting - outdated. Do not implement.
             case 12: // Control cursor blinking - ignore.
             case 25: // Hide/show cursor - no action needed, renderer will check with shouldCursorBeVisible().
+                if (setting) {
+                    // The app is pointing at its caret ("CUP <caret> ESC[?25h"); remember where, so
+                    // clients can locate the app's input line without racing the redraw. See
+                    // getDeclaredCursorRow().
+                    mDeclaredCursorRow = mCursorRow;
+                    mDeclaredCursorCol = mCursorCol;
+                    mDeclaredCursorRows = mRows;
+                    mDeclaredCursorColumns = mColumns;
+                }
                 if (mClient != null)
                     mClient.onTerminalCursorStateChange(setting);
                 break;
@@ -1855,6 +1906,8 @@ public final class TerminalEmulator {
                 // Reset: Use Normal Screen Buffer and restore cursor as in DECRC.
                 TerminalBuffer newScreen = setting ? mAltBuffer : mMainBuffer;
                 if (newScreen != mScreen) {
+                    // The declared caret belongs to the buffer being left.
+                    clearDeclaredCursor();
                     boolean resized = !(newScreen.mColumns == mColumns && newScreen.mScreenRows == mRows);
                     if (setting) saveCursor();
                     mScreen = newScreen;
@@ -3503,6 +3556,7 @@ public final class TerminalEmulator {
         mSavedStateMain.mSavedCursorRow = mSavedStateMain.mSavedCursorCol = mSavedStateMain.mSavedEffect = mSavedStateMain.mSavedDecFlags = 0;
         mSavedStateAlt.mSavedCursorRow = mSavedStateAlt.mSavedCursorCol = mSavedStateAlt.mSavedEffect = mSavedStateAlt.mSavedDecFlags = 0;
         mCurrentDecSetFlags = 0;
+        clearDeclaredCursor();
         // Initial wrap-around is not accurate but makes terminal more useful, especially on a small screen:
         setDecsetinternalBit(DECSET_BIT_AUTOWRAP, true);
         setDecsetinternalBit(DECSET_BIT_CURSOR_ENABLED, true);

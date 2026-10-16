@@ -651,7 +651,15 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
      *
      * <p>The cursor is drawn at visual row {@code emulator.getCursorRow() - getTopRow()} (see
      * {@link com.termux.view.TerminalRenderer#render}). TUI apps such as OpenCode keep the cursor
-     * inside their prompt field, so a tap on that row identifies a tap on the app's input line.
+     * inside their prompt field, so a tap on that row identifies a tap on the app's input line.</p>
+     *
+     * <p>The row the app itself declared with {@code ESC[?25h} ("show cursor") is preferred over the
+     * live cursor row while a full-screen (alternate buffer) app is running. Such a TUI hides the
+     * cursor while it repaints, sweeps it across the screen to draw, parks it on the caret and only
+     * then shows it, so the live row is a random mid-redraw position; a resize also moves it during
+     * reflow. The declared row is the app's own caret, and the emulator discards it after a resize so
+     * the live row is used again. On the main buffer (an ordinary shell) the live cursor row already
+     * sits on the prompt, so it is kept as-is.</p>
      */
     public boolean isTerminalCursorLineTap(MotionEvent e) {
         final TerminalView terminalView = getTerminalView();
@@ -660,8 +668,11 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         final TerminalEmulator emulator = terminalView.mEmulator;
         if (emulator == null) return false;
 
+        final int declaredRow = emulator.isAlternateBufferActive() ? emulator.getDeclaredCursorRow() : -1;
+        final int cursorRow = declaredRow >= 0 ? declaredRow : emulator.getCursorRow();
+
         final int tappedRow = terminalView.getColumnAndRow(e, false)[1];
-        return TerminalCursorLine.isCursorLine(tappedRow, emulator.getCursorRow(),
+        return TerminalCursorLine.isCursorLine(tappedRow, cursorRow,
             terminalView.getTopRow(), emulator.mRows);
     }
 
@@ -671,10 +682,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
      * <p>This is the reliable superset of {@link #isTerminalCursorLineTap(MotionEvent)}: a tap on
      * the cursor line still counts, but so does a tap anywhere in the OpenCode TUI's composer
      * region. The cursor-line test alone depended on the hardware cursor sitting on the tapped row,
-     * which does not hold in every case (for example after hiding the keyboard, backgrounding and
-     * re-entering the app, when the TUI has redrawn and parked the cursor elsewhere). Recognising
-     * the composer from the screen itself removes that dependency, so tapping the TUI input box
-     * always switches to the compose field.</p>
+     * which does not hold in every case - a full-screen TUI only parks its cursor on the caret at
+     * the end of a repaint and moves it again on the next one. Recognising the composer from the
+     * screen (and from the caret row the TUI declares with {@code ESC[?25h}) removes that
+     * dependency, so tapping the TUI input box always switches to the compose field.</p>
      */
     public boolean isTerminalComposeTap(MotionEvent e) {
         if (isTerminalCursorLineTap(e)) return true;
@@ -696,6 +707,12 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (state == TuiState.DIALOG) return false;
 
         final int tappedRow = terminalView.getColumnAndRow(e, false)[1];
+
+        // The TUI's own caret anchors the composer block even when a long draft or a narrow window
+        // hides the placeholder and the shortcut footer.
+        final int caretRow = emulator.getDeclaredCursorRow();
+        if (TuiClassifier.isComposerRowAt(snapshot, tappedRow, caretRow)) return true;
+
         if (TuiClassifier.isComposerRow(snapshot, tappedRow)) return true;
 
         // The TUI is running but its composer markers could not be recognised - a non-empty draft

@@ -35,6 +35,37 @@ public class DecSetTest extends TerminalTestCase {
 		assertTrue(mTerminal.isCursorEnabled());
 	}
 
+	/** DECSET 25 records the caret row the app declares when it shows the cursor. */
+	public void testShowCursorDeclaresCaretRow() {
+		withTerminalSized(10, 5);
+		assertEquals("No caret has been declared yet", -1, mTerminal.getDeclaredCursorRow());
+		assertEquals(-1, mTerminal.getDeclaredCursorCol());
+
+		// A full-screen app parks the cursor on its caret and then shows it:
+		enterString("\033[3;4H\033[?25h");
+		assertEquals(2, mTerminal.getDeclaredCursorRow());
+		assertEquals(3, mTerminal.getDeclaredCursorCol());
+
+		// Later redraws may sweep the cursor around; the declared row is not affected.
+		enterString("\033[1;1H");
+		assertEquals(2, mTerminal.getDeclaredCursorRow());
+
+		// Hiding the cursor does not forget the caret either.
+		enterString("\033[?25l");
+		assertEquals(2, mTerminal.getDeclaredCursorRow());
+
+		// After a resize the recorded row refers to the old geometry: report it as unknown and let
+		// the app re-declare it on its next repaint.
+		resize(10, 8);
+		assertEquals(-1, mTerminal.getDeclaredCursorRow());
+		enterString("\033[2;2H\033[?25h");
+		assertEquals(1, mTerminal.getDeclaredCursorRow());
+
+		// Switching the screen buffer drops the caret of the buffer being left.
+		enterString("\033[?1049h");
+		assertEquals(-1, mTerminal.getDeclaredCursorRow());
+	}
+
 	/** DECSET 2004, controls bracketed paste mode. */
 	public void testBracketedPasteMode() {
 		withTerminalSized(3, 3);

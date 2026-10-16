@@ -198,6 +198,30 @@ public final class TuiClassifier {
     }
 
     /**
+     * Whether screen {@code row} is inside the composer block when the row the running app declared
+     * as its caret is known ({@code TerminalEmulator#getDeclaredCursorRow()}, i.e. the destination
+     * of the {@code CUP <caret> ESC[?25h} an OpenTUI-style app emits at the end of every repaint).
+     *
+     * <p>This is the precise counterpart of {@link #isComposerRow}: instead of anchoring the block on
+     * the footer/placeholder text - which a long draft or a narrow window hides - it anchors on the
+     * app's own caret. The caret is only accepted as an anchor when it sits in the bottom band, so a
+     * caret inside a full-screen list or dialog is never mistaken for the input line.</p>
+     *
+     * @return false when {@code snapshot} is null, when either row is out of range, or when the caret
+     *         is not in the bottom band of the screen.
+     */
+    public static boolean isComposerRowAt(TuiSnapshot snapshot, int row, int caretRow) {
+        if (snapshot == null) return false;
+        int rows = snapshot.rowCount();
+        if (row < 0 || row >= rows) return false;
+        if (caretRow < 0 || caretRow >= rows) return false;
+        // The composer is the bottom-most block; a caret higher up belongs to something else.
+        if (caretRow < rows - composerBand(rows)) return false;
+        int bottom = Math.min(rows - 1, caretRow + COMPOSER_ROWS_BELOW_TEXTAREA);
+        return inComposerBand(rows, row, bottom);
+    }
+
+    /**
      * Whether {@code row} is in the bottom band that the composer occupies, without requiring any
      * composer marker to be visible.
      *
@@ -212,8 +236,13 @@ public final class TuiClassifier {
         return inComposerBand(rows, row, rows - 1);
     }
 
+    /** Height in rows of the composer block on a screen {@code rows} tall. */
+    public static int composerBand(int rows) {
+        return Math.max(COMPOSER_BAND_MIN_ROWS, Math.min(rows / 3, COMPOSER_BAND_MAX_ROWS));
+    }
+
     private static boolean inComposerBand(int rows, int row, int bottom) {
-        int band = Math.max(COMPOSER_BAND_MIN_ROWS, Math.min(rows / 3, COMPOSER_BAND_MAX_ROWS));
+        int band = composerBand(rows);
         int top = Math.max(0, bottom - band + 1);
         return row >= top && row <= bottom;
     }

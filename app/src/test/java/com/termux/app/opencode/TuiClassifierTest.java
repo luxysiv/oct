@@ -214,6 +214,52 @@ public class TuiClassifierTest {
         assertFalse(TuiClassifier.isComposerBandRow(null, 0));
     }
 
+    @Test
+    public void composerRowAtAnchorsOnTheDeclaredCaret() {
+        // Caret declared on row 15 of 20: band = 8, so the block is rows 12..min(19, 15 + 4 = 19).
+        String[] lines = filled(20);
+        Arrays.fill(lines, "assistant response text");
+        TuiSnapshot s = snapshot(true, lines);
+        assertTrue(TuiClassifier.isComposerRowAt(s, 15, 15));
+        assertTrue(TuiClassifier.isComposerRowAt(s, 19, 15));
+        assertTrue(TuiClassifier.isComposerRowAt(s, 12, 15));
+        assertFalse(TuiClassifier.isComposerRowAt(s, 11, 15));
+        assertFalse(TuiClassifier.isComposerRowAt(s, 20, 15));
+    }
+
+    @Test
+    public void composerRowAtWorksWithoutAnyComposerMarker() {
+        // A long draft in a narrow window hides the placeholder and the footer.
+        String[] lines = filled(24);
+        Arrays.fill(lines, "assistant response text");
+        TuiSnapshot s = snapshot(true, lines);
+        // band(24) = 8, so the caret only anchors the composer from row 16 down.
+        assertTrue(TuiClassifier.isComposerRowAt(s, 20, 20));
+        assertTrue(TuiClassifier.isComposerRowAt(s, 23, 20));
+        assertFalse(TuiClassifier.isComposerRowAt(s, 15, 20));
+    }
+
+    @Test
+    public void composerRowAtRejectsACaretOutsideTheBottomBand() {
+        // A dialog / full-screen list keeps its caret in the middle of the screen.
+        String[] lines = filled(20);
+        Arrays.fill(lines, "Select something");
+        TuiSnapshot s = snapshot(true, lines);
+        // caretRow 10 < 20 - band(8) = 12.
+        assertFalse(TuiClassifier.isComposerRowAt(s, 10, 10));
+    }
+
+    @Test
+    public void composerRowAtIsSafeForBadInput() {
+        String[] lines = filled(20);
+        TuiSnapshot s = snapshot(true, lines);
+        assertFalse(TuiClassifier.isComposerRowAt(null, 0, 0));
+        assertFalse(TuiClassifier.isComposerRowAt(s, -1, 15));
+        assertFalse(TuiClassifier.isComposerRowAt(s, 20, 15));
+        assertFalse(TuiClassifier.isComposerRowAt(s, 15, -1));
+        assertFalse(TuiClassifier.isComposerRowAt(s, 15, 20));
+    }
+
     private static String[] filled(int count) {
         String[] lines = new String[count];
         Arrays.fill(lines, "");

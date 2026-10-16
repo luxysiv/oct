@@ -350,8 +350,11 @@ Trước đây chạm dòng nhập chỉ **khi được khi không**. Ba nguyên
    focus được gì (tap "bị nuốt" im lặng). `focusTerminalToolbarTextInput()` giờ
    chờ layout (`addOnLayoutChangeListener`) để focus + mở IME.
 
-Phần ánh xạ dòng vẫn là `TerminalCursorLine.isCursorLine(...)` (có unit test); chỉ
-đổi **thời điểm** lấy mẫu, không đổi công thức.
+Phần ánh xạ dòng vẫn là `TerminalCursorLine.isCursorLine(...)` (có unit test); công thức
+giữ nguyên. Trước đây chỉ đổi **thời điểm** lấy mẫu (ngay tại `ACTION_UP`, trước `onUp`); từ
+2026-10-16 đổi cả **nguồn dòng**: thay `getCursorRow()` (con trỏ sống, chỉ đúng ở cuối frame) bằng
+`getDeclaredCursorRow()` — dòng caret mà TUI khai báo bằng `ESC[?25h` (xem
+[`TOOLBAR_TUI.md`](TOOLBAR_TUI.md) mục 3b).
 
 ### Đổi nhãn (giữ package)
 
@@ -396,11 +399,22 @@ Rà soát 5 điểm gãy khi `opencode upgrade` / cập nhật glibc ghi đè ru
 - **Phần 1 xong**: `TuiBridge` (đọc snapshot từ `TerminalEmulator` + xác định session
   `opencode`) và logic thuần `TuiSnapshot`/`TuiState`/`TuiClassifier` + test JVM
   (`app/src/test/java/com/termux/app/opencode/TuiClassifierTest.java`).
+- **Nhận diện ô nhập làm lại (2026-10-16)**: bỏ phụ thuộc con trỏ "sống" — nguồn gốc của
+  kiểu "khi được khi không". Chạy TUI trong PTY thật rồi soi byte cho thấy OpenTUI vẽ mỗi
+  frame theo `?25l` → quét CUP khắp màn hình → `CUP <caret>` → `?25h`: byte ngay trước
+  `?25h` là ô caret (304/317 lần trong một capture), còn con trỏ sống chỉ đúng vào lúc
+  cuối frame (và bị reflow đổi chỗ khi resize). `TerminalEmulator` giờ ghi lại vị trí đó
+  (`getDeclaredCursorRow()`, vô hiệu khi kích thước đổi / reset / đổi buffer);
+  `TermuxActivity.isTerminalCursorLineTap()` + `TuiClassifier.isComposerRowAt()` dùng nó
+  để mở ô nhập; nhận diện theo nội dung (`isComposerRow`/`isComposerBandRow`) giữ làm dự
+  phòng. Chi tiết + bằng chứng ở [`TOOLBAR_TUI.md`](TOOLBAR_TUI.md) mục 3b, kiểm chứng lại
+  bằng `scripts/opencode-tui-cursor-proof.sh` (chạy TUI trong PTY thật, 7/7 PASS).
 - **Phần 4 xong (bản sửa lỗi chuyển ô nhập)**: chạm vào ô input của openTUI giờ **luôn** chuyển
   sang ô nhập của Termux, kể cả sau khi ẩn bàn phím → background → mở lại app. Thêm
-  `TermuxActivity.isTerminalComposeTap()` (đường nhanh theo dòng con trỏ + dự phòng nhận diện vùng
-  composer từ màn hình qua `TuiClassifier.isComposerRow()`), dùng trong
-  `TermuxTerminalViewClient.onSingleTapUpImmediate()`. Không dùng cú chạm khi `DIALOG` đang mở.
+  `TermuxActivity.isTerminalComposeTap()` (đường nhanh theo dòng caret do TUI khai báo + dự phòng
+  nhận diện vùng composer từ màn hình qua `TuiClassifier.isComposerRow()`/`isComposerRowAt()`),
+  dùng trong `TermuxTerminalViewClient.onSingleTapUpImmediate()`. Không dùng cú chạm khi `DIALOG`
+  đang mở.
 - **Phần 2–3, 5–8 còn lại** (submit an toàn, nút xuống dòng, soi text composer, autocomplete
   `/command`, toolbar "remote", `clickCell`) — xem checklist trong `TOOLBAR_TUI.md`.
 

@@ -8,8 +8,10 @@ TUI `opencode` đang chạy trong terminal, **không dùng HTTP API**. Mục đ�
 > giao thức riêng nào cần phát minh — chỉ cần ghi đúng byte mà TUI hiểu, và đọc đúng dấu hiệu
 > mà TUI vẽ ra.
 
-Trạng thái hiện tại: **Phần 1 đã xong** (đọc snapshot + `classify()`). Các phần còn lại ở mục
-[Lộ trình](#lộ-trình).
+Trạng thái hiện tại: **Phần 1 đã xong** (đọc snapshot + `classify()`), và **cách nhận diện ô nhập
+đã được làm lại** (2026-10-16): không còn tin con trỏ "sống" — dùng dòng caret mà chính TUI khai
+báo qua `ESC[?25h` (xem [mục 3b](#3b-dòng-caret-do-tui-tự-khai-báo--phát-kiện-2026-10-16)). Các
+phần còn lại ở mục [Lộ trình](#lộ-trình).
 
 ---
 
@@ -73,6 +75,9 @@ Thứ tự phân loại trong `TuiClassifier.classify`:
 - `TerminalBuffer.getSelectedText(x1, y1, x2, y2)` — **`y2` là inclusive** (`for row <= y2`).
   → lấy 1 dòng: `getSelectedText(0, row, columns, row)` (đã dùng trong `TuiBridge.snapshot`).
 - `TerminalEmulator.getCursorRow()/getCursorCol()`
+- `TerminalEmulator.getDeclaredCursorRow()/getDeclaredCursorCol()` — dòng/cột caret mà app tự khai
+  báo bằng `ESC[?25h` (xem [mục 3b](#3b-dòng-caret-do-tui-tự-khai-báo--phát-kiện-2026-10-16)); trả
+  `-1` khi chưa biết hoặc khi terminal đã đổi kích thước kể từ lúc ghi.
 - `TerminalEmulator.isAlternateBufferActive()` / `isMouseTrackingActive()` / `getTitle()`
 - Session opencode: `TerminalSession.mSessionName` chứa `"opencode"` (đặt khi auto-launch trong
   `TermuxActivity`; xem `TermuxTerminalSessionActivityClient.addNewSession`).
@@ -85,6 +90,90 @@ Ghi (chưa dùng ở phần 1):
 
 Khả năng emulator: **có** bracketed paste (2004), SGR mouse (1000/1002/1006);
 **không có** kitty CSI-u, **không có** modifyOtherKeys (log `(ignored) CSI > MODIFY RESOURCE`).
+
+### 3b. Dòng caret do TUI tự khai báo — phát kiện 2026-10-16
+
+#### Vấn đề: "khi được khi không"
+
+Đường nhanh cũ so **dòng chạm** với `emulator.getCursorRow()` (con trỏ sống). Nó trượt thường
+xuyên vì OpenTUI **không** giữ con trỏ ở caret liên tục. Chạy `opencode` TUI trong PTY thật
+(`script -q -c "stty rows 24 cols 80; opencode" cap.log`, 24×80) rồi soi byte thô cho thấy cấu
+trúc **mỗi frame**:
+
+```
+ESC[?2026l ESC[?2026h            ← synchronized output (emulator bỏ qua)
+ESC[?25l                          ← ẩn con trỏ
+ESC[1;1H <SGR> ... ESC[1;22H ...  ← quét con trỏ khắp màn hình để vẽ
+ESC[15;18H                        ← park đúng ô caret
+ESC[?25h                          ← mới hiện con trỏ
+```
+
+Bằng chứng đếm trên một capture 24×80 (~6 s, 3397 lệnh CUP):
+
+| Đo | Giá trị |
+|---|---|
+| `ESC[?25h` (hiện) | 317 |
+| `ESC[?25l` (ẩn) | 319 |
+| `ESC[<row>;<col>H` rồi ngay `ESC[?25h` | **304 lần = `15;18`** (ô caret), 12 lần `14;7`, 1 lần `14;18` |
+| CUP trung bình mỗi show | ~10.7 |
+
+⇒ Trong ~96% frame, byte ngay trước `?25h` là `CUP <caret>`; ~4% frame kết thúc ở dòng khác (frame
+chuyển tiếp). Vì vậy đọc con trỏ **sống** tại thời điểm chạm sẽ trúng phần lớn nhưng trượt phần còn
+lại — đúng kiểu "khi được khi không". (Tỉ lệ frame không phải xác suất chính xác, vì việc lấy mẫu
+không rơi đều theo thời gian: ranh giới mỗi lần `read()` từ PTY có thể cắt ngang một frame, để lại
+con trỏ sống ở dòng đang vẽ.) Khi TUI bận/đang animate (spinner) nó redraw ~50–60 fps (capture khác:
+636 toggle `?25` trong 6 s), còn lúc rảnh chỉ còn nhịp nháy ~2 Hz.
+
+Hai nguồn sai khác đã kiểm chứng thêm:
+
+- **Resize làm con trỏ "park" theo hình học cũ.** `TerminalEmulator.resizeScreen()` **dịch chuyển**
+  `mCursorRow` theo reflow. Khi bàn phím ẩn/hiện hoặc app quay lại foreground, view đổi số dòng ⇒
+  con trỏ sống bị reflow đổi chỗ, trong khi TUI (có thể đang bị OS "đóng băng") chưa vẽ lại ⇒ dòng
+  chạm không còn khớp.
+- **Dialog chiếm caret.** Ctrl+P mở palette: caret nhảy sang dòng selection của palette (đo được
+  `ESC[10;15H ESC[?25h`, row 10), rồi trả về `15;7` khi đóng ⇒ nếu dùng dòng caret phải loại trừ
+  `DIALOG`.
+
+Đã thử phương án "để TUI tự trả lời" (gửi SGR mouse click rồi xem TUI có dời caret tới chỗ chạm
+không): **không dùng được** — click vào ô composer không làm caret đổi chỗ (composer vốn đã focus),
+nên không có tín hiệu phân biệt với click vào transcript.
+
+#### Cách làm mới
+
+`TerminalEmulator` ghi lại vị trí con trỏ **ngay khi xử lý `ESC[?25h`**:
+
+- thêm `mDeclaredCursorRow/Col` + `mDeclaredCursorRows/Columns` (kích thước lúc ghi);
+- `case 25` khi `setting == true` (hiện) ⇒ ghi `mCursorRow/mCursorCol` + kích thước hiện tại;
+- getter trả `-1` khi: chưa từng ghi, **hoặc** `mRows/mColumns` đã đổi (giá trị thuộc hình học cũ);
+- xoá khi `reset()`/RIS và khi **đổi screen buffer** (1049/1047/47) — caret thuộc buffer vừa rời.
+
+Ba lớp quyết định trong `TermuxActivity.isTerminalComposeTap` (sau khi loại `DIALOG`):
+
+1. `isTerminalCursorLineTap` — chỉ khi **alt-buffer** đang bật, so dòng chạm với **declared** row
+   (fallback về con trỏ sống khi chưa có); shell (main buffer) vẫn dùng con trỏ sống vì ở đó con trỏ
+   vốn đứng đúng dấu nhắc.
+2. `TuiClassifier.isComposerRowAt(snapshot, row, caretRow)` — neo dải composer vào caret do app
+   khai báo (không cần placeholder/footer) ⇒ xử lý được draft dài / cửa sổ hẹp che marker. Chỉ nhận
+   caret làm mốc khi nó nằm ở **dải đáy** (`caretRow >= rows - band`), nên caret giữa màn hình
+   (dialog/list toàn màn hình) không bị nhầm là ô nhập.
+3. `isComposerRow` (neo theo footer/placeholder) rồi `isComposerBandRow` — như cũ.
+
+Ưu điểm: bám đúng "app tự nói caret ở đâu", không đoán theo thời điểm, và tự vô hiệu khi hình học
+đổi để rơi về nhận diện theo nội dung.
+
+#### Kiểm chứng lại (proof script)
+
+Hợp đồng byte ở trên là hành vi của TUI, nên nó có thể đổi khi openCode/OpenTUI lên phiên bản mới.
+`scripts/opencode-tui-cursor-proof.sh` chạy lại đúng thí nghiệm này trên máy (PTY thật qua `script`,
+không cần API, không cần build APK) và tự kiểm:
+
+1. TUI có bật/tắt con trỏ (`ESC[?25l`/`ESC[?25h`) và dùng synchronized output (`ESC[?2026h/l`);
+2. phần lớn `ESC[?25h` được đứng ngay trước bởi `ESC[<row>;<col>H` (đích con trỏ mà
+   `getDeclaredCursorRow()` ghi lại) — ngưỡng đặt ở 80%, thực đo idle thấy **220/220**;
+3. khi rảnh, dòng caret khai báo là **một dòng cố định ở nửa dưới** màn hình;
+4. khi gõ, **cột** caret khai báo đổi theo draft còn **dòng** giữ nguyên.
+
+Chạy: `bash scripts/opencode-tui-cursor-proof.sh` (giữ capture trong `$PREFIX/tmp/oc-tui-cursor.<pid>/`).
 
 ---
 
@@ -145,17 +234,17 @@ prompt.autocomplete.select=return
 - [ ] **2. Submit an toàn** — nút Gửi / phím Enter chỉ gửi `\r` khi `classify()==COMPOSER`
       (hoặc `BUSY` nếu muốn steer); chặn khi `DIALOG`/`UNKNOWN`.
 - [ ] **3. Nút "xuống dòng"** — gửi `ESC[27;2;13~` thay vì newline literal.
-- [x] **4. Mở ô nhập theo vùng composer** — xong (bản sửa lỗi "chạm ô input mà không chuyển
-      sang ô nhập của Termux"). `TermuxActivity.isTerminalComposeTap()` giữ đường nhanh theo dòng
-      con trỏ, rồi thêm đường dự phòng nhận diện **vùng composer từ chính màn hình**:
-      `TuiClassifier.isComposerRow(snapshot, row)` neo vào footer composer (`agents`+`commands`,
-      hoặc `esc … interrupt`) hay dòng placeholder (`Ask anything`/`Run a command`), rồi nhận vùng
-      cao `max(8, min(rows/3, 12))` phía trên mốc neo. Không còn phụ thuộc con trỏ phần cứng
-      (OpenTUI ẩn hoặc đẩy con trỏ về (0,0) ở một số lần vẽ lại, ví dụ sau khi ẩn bàn phím →
-      background → mở lại app). Ca không nhận diện được (bản nháp khác rỗng + cửa sổ hẹp `< 44` che
-      cả placeholder lẫn footer) rơi vào `TuiState.UNKNOWN` và được xử lý bằng
-      `isComposerBandRow()` (dải đáy). Vẫn chặn khi `classify()==DIALOG` để không nuốt cú chạm vào
-      hộp thoại.
+- [x] **4. Mở ô nhập theo vùng composer** — xong, đã làm lại (2026-10-16).
+      Bản đầu dùng đường nhanh theo con trỏ **sống** rồi dự phòng nhận diện vùng composer từ màn
+      hình (`TuiClassifier.isComposerRow`); con trỏ sống không ổn định (xem
+      [mục 3b](#3b-dòng-caret-do-tui-tự-khai-báo--phát-kiện-2026-10-16)).
+      Bản hiện tại: `TermuxActivity.isTerminalCursorLineTap()` so dòng chạm với **dòng caret do TUI
+      khai báo** (`TerminalEmulator.getDeclaredCursorRow()`, từ `ESC[?25h`), rồi
+      `TuiClassifier.isComposerRowAt(snapshot, row, caretRow)` neo dải composer vào caret đó, sau
+      cùng mới tới `isComposerRow` / `isComposerBandRow`. Vẫn chặn khi `classify()==DIALOG`.
+      Đường nhanh theo con trỏ sống giữ làm fallback khi chưa có declared row (non-OpenTUI/shell).
+      Test: `DecSetTest.testShowCursorDeclaresCaretRow`,
+      `TuiClassifierTest.composerRowAt*`.
 - [ ] **5. Soi text composer vào `EditText`** — đọc lại text đang có trong ô soạn thảo TUI để
       sửa thay vì gõ lại.
 - [ ] **6. Autocomplete `/command`** — xử lý xác định (mũi tên + `\r` chọn), tránh lệ thuộc timing.
@@ -174,9 +263,13 @@ Khi làm phần ghi: thêm phương thức vào `TuiBridge` (ví dụ `sendSubmi
 - Token có thể đổi khi openCode lên phiên bản mới → giữ tất cả trong `TuiClassifier`, dễ sửa.
 - Dialog title một từ (`Commands`…) phải khớp cả dòng; nếu openCode đổi cách vẽ (viền cùng dòng)
   thì cần xem lại `DIALOG_TITLES_EXACT`.
+- `isComposerRowAt` chỉ nhận caret làm mốc khi caret nằm ở **dải đáy**; dialog/list neo đáy mà
+  không có title nhận diện được vẫn có thể lọt. Đổi lại, nó bỏ hẳn phụ thuộc placeholder/footer.
+- Khi TUI không phát `ESC[?25h` (app khác OpenTUI) thì `getDeclaredCursorRow()` trả `-1` và mọi
+  thứ rơi về con trỏ sống + nhận diện theo nội dung như cũ.
 - Footer `agents`/`commands` có thể không hiện khi cửa sổ hẹp (`layout().shortcuts`).
 - Vùng composer (`TuiClassifier.isComposerRow`) là ước lượng theo mốc neo, không đo chính xác
-  chiều cao khung: bản nháp dài có thể vượt `min(rows/3, 12)` dòng. Chấp nhận được vì khi đã gõ
-  dài thì ô nhập Termux thường đang được focus sẵn.
+  chiều cao khung: bản nháp dài có thể vượt `min(rows/3, 12)` dòng. Khi có caret do TUI khai báo,
+  `isComposerRowAt` neo đúng vào caret nên không còn phụ thuộc ước lượng này.
 - Chưa build chạy được trên máy này (không có JDK/Android SDK) → code viết cẩn thận; test thuần
   sẽ chạy trong CI.
