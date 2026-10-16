@@ -389,6 +389,17 @@ Rà soát 5 điểm gãy khi `opencode upgrade` / cập nhật glibc ghi đè ru
 (`/usr/bin/env` không tồn tại). Đã kiểm chứng và ghi lại trong
 [`ENVIRONMENT.md`](ENVIRONMENT.md).
 
+### Cầu nối Toolbar ↔ TUI không dùng API (2026-10-16)
+
+- Đã tách riêng thiết kế + lộ trình vào **`TOOLBAR_TUI.md`**: nối thanh công cụ với TUI
+  `opencode` **trực tiếp qua PTY** (ghi byte, đọc màn hình), **không** dùng HTTP API.
+- **Phần 1 xong**: `TuiBridge` (đọc snapshot từ `TerminalEmulator` + xác định session
+  `opencode`) và logic thuần `TuiSnapshot`/`TuiState`/`TuiClassifier` + test JVM
+  (`app/src/test/java/com/termux/app/opencode/TuiClassifierTest.java`).
+- **Phần 2–8 còn lại** (submit an toàn, nút xuống dòng, mở ô nhập theo vùng composer,
+  soi text composer, autocomplete `/command`, toolbar "remote", `clickCell`) — xem
+  checklist trong `TOOLBAR_TUI.md`.
+
 ### Chưa làm / rủi ro còn lại
 
 - **Chưa build được trên máy**: Termux này không có JDK/Android SDK
