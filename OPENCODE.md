@@ -396,9 +396,13 @@ Rà soát 5 điểm gãy khi `opencode upgrade` / cập nhật glibc ghi đè ru
 - **Phần 1 xong**: `TuiBridge` (đọc snapshot từ `TerminalEmulator` + xác định session
   `opencode`) và logic thuần `TuiSnapshot`/`TuiState`/`TuiClassifier` + test JVM
   (`app/src/test/java/com/termux/app/opencode/TuiClassifierTest.java`).
-- **Phần 2–8 còn lại** (submit an toàn, nút xuống dòng, mở ô nhập theo vùng composer,
-  soi text composer, autocomplete `/command`, toolbar "remote", `clickCell`) — xem
-  checklist trong `TOOLBAR_TUI.md`.
+- **Phần 4 xong (bản sửa lỗi chuyển ô nhập)**: chạm vào ô input của openTUI giờ **luôn** chuyển
+  sang ô nhập của Termux, kể cả sau khi ẩn bàn phím → background → mở lại app. Thêm
+  `TermuxActivity.isTerminalComposeTap()` (đường nhanh theo dòng con trỏ + dự phòng nhận diện vùng
+  composer từ màn hình qua `TuiClassifier.isComposerRow()`), dùng trong
+  `TermuxTerminalViewClient.onSingleTapUpImmediate()`. Không dùng cú chạm khi `DIALOG` đang mở.
+- **Phần 2–3, 5–8 còn lại** (submit an toàn, nút xuống dòng, soi text composer, autocomplete
+  `/command`, toolbar "remote", `clickCell`) — xem checklist trong `TOOLBAR_TUI.md`.
 
 ### Chưa làm / rủi ro còn lại
 

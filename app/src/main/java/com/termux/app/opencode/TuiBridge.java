@@ -40,30 +40,40 @@ public final class TuiBridge {
     /**
      * Take a snapshot of the session's visible screen, or {@code null} when the session or its
      * emulator is not ready yet.
+     *
+     * <p>The screen buffer is read from the UI thread without holding a lock (the renderer does the
+     * same). A concurrent resize can therefore tear the buffer, so a failure here degrades to
+     * {@code null} (which callers treat as "unknown") instead of crashing the touch handler.</p>
      */
     @Nullable
     public static TuiSnapshot snapshot(@Nullable TerminalSession session) {
         if (session == null) return null;
 
-        TerminalEmulator emulator = session.getEmulator();
-        if (emulator == null) return null;
+        try {
+            TerminalEmulator emulator = session.getEmulator();
+            if (emulator == null) return null;
 
-        int rows = emulator.getRows();
-        int columns = emulator.getColumns();
-        TerminalBuffer screen = emulator.getScreen();
+            int rows = emulator.getRows();
+            int columns = emulator.getColumns();
+            TerminalBuffer screen = emulator.getScreen();
+            if (screen == null) return null;
 
-        List<String> lines = new ArrayList<>(Math.max(rows, 0));
-        for (int row = 0; row < rows; row++) {
-            // TerminalBuffer#getSelectedText uses an inclusive end row, so a single row is
-            // (0, row, columns, row). Trailing blanks are already trimmed by the emulator.
-            String line = screen.getSelectedText(0, row, columns, row);
-            lines.add(line == null ? "" : line);
+            List<String> lines = new ArrayList<>(Math.max(rows, 0));
+            for (int row = 0; row < rows; row++) {
+                // TerminalBuffer#getSelectedText uses an inclusive end row, so a single row is
+                // (0, row, columns, row). Trailing blanks are already trimmed by the emulator.
+                String line = screen.getSelectedText(0, row, columns, row);
+                lines.add(line == null ? "" : line);
+            }
+
+            return new TuiSnapshot(lines, columns, rows,
+                emulator.getCursorRow(), emulator.getCursorCol(),
+                emulator.isAlternateBufferActive(), emulator.isMouseTrackingActive(),
+                emulator.getTitle());
+        } catch (RuntimeException e) {
+            // The emulator was resized while reading; report "not ready" rather than propagate.
+            return null;
         }
-
-        return new TuiSnapshot(lines, columns, rows,
-            emulator.getCursorRow(), emulator.getCursorCol(),
-            emulator.isAlternateBufferActive(), emulator.isMouseTrackingActive(),
-            emulator.getTitle());
     }
 
     /**

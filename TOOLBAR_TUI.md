@@ -145,8 +145,17 @@ prompt.autocomplete.select=return
 - [ ] **2. Submit an toàn** — nút Gửi / phím Enter chỉ gửi `\r` khi `classify()==COMPOSER`
       (hoặc `BUSY` nếu muốn steer); chặn khi `DIALOG`/`UNKNOWN`.
 - [ ] **3. Nút "xuống dòng"** — gửi `ESC[27;2;13~` thay vì newline literal.
-- [ ] **4. Mở ô nhập theo vùng composer** — chỉ mở compose khi chạm vào vùng ô soạn thảo,
-      dùng `classify()` thay vì đoán theo dòng con trỏ.
+- [x] **4. Mở ô nhập theo vùng composer** — xong (bản sửa lỗi "chạm ô input mà không chuyển
+      sang ô nhập của Termux"). `TermuxActivity.isTerminalComposeTap()` giữ đường nhanh theo dòng
+      con trỏ, rồi thêm đường dự phòng nhận diện **vùng composer từ chính màn hình**:
+      `TuiClassifier.isComposerRow(snapshot, row)` neo vào footer composer (`agents`+`commands`,
+      hoặc `esc … interrupt`) hay dòng placeholder (`Ask anything`/`Run a command`), rồi nhận vùng
+      cao `max(8, min(rows/3, 12))` phía trên mốc neo. Không còn phụ thuộc con trỏ phần cứng
+      (OpenTUI ẩn hoặc đẩy con trỏ về (0,0) ở một số lần vẽ lại, ví dụ sau khi ẩn bàn phím →
+      background → mở lại app). Ca không nhận diện được (bản nháp khác rỗng + cửa sổ hẹp `< 44` che
+      cả placeholder lẫn footer) rơi vào `TuiState.UNKNOWN` và được xử lý bằng
+      `isComposerBandRow()` (dải đáy). Vẫn chặn khi `classify()==DIALOG` để không nuốt cú chạm vào
+      hộp thoại.
 - [ ] **5. Soi text composer vào `EditText`** — đọc lại text đang có trong ô soạn thảo TUI để
       sửa thay vì gõ lại.
 - [ ] **6. Autocomplete `/command`** — xử lý xác định (mũi tên + `\r` chọn), tránh lệ thuộc timing.
@@ -166,5 +175,8 @@ Khi làm phần ghi: thêm phương thức vào `TuiBridge` (ví dụ `sendSubmi
 - Dialog title một từ (`Commands`…) phải khớp cả dòng; nếu openCode đổi cách vẽ (viền cùng dòng)
   thì cần xem lại `DIALOG_TITLES_EXACT`.
 - Footer `agents`/`commands` có thể không hiện khi cửa sổ hẹp (`layout().shortcuts`).
+- Vùng composer (`TuiClassifier.isComposerRow`) là ước lượng theo mốc neo, không đo chính xác
+  chiều cao khung: bản nháp dài có thể vượt `min(rows/3, 12)` dòng. Chấp nhận được vì khi đã gõ
+  dài thì ô nhập Termux thường đang được focus sẵn.
 - Chưa build chạy được trên máy này (không có JDK/Android SDK) → code viết cẩn thận; test thuần
   sẽ chạy trong CI.

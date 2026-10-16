@@ -183,7 +183,8 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
 
 
     /**
-     * Reveal the toolbar compose field when the tap lands on the terminal's input line.
+     * Reveal the toolbar compose field when the tap lands on the terminal's input line or anywhere
+     * in the OpenCode TUI's composer region.
      *
      * <p>This runs synchronously with the tap's up event on purpose. The delayed, double tap aware
      * {@link #onSingleTapUp(MotionEvent)} used to do this, which made the switch from the TUI's own
@@ -191,7 +192,11 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
      * out to be a double tap (users tap twice when the first tap seems unresponsive), and it runs
      * only after the double tap timeout, by which time the tap had already been forwarded to the
      * TUI as a mouse click - the TUI could move its cursor, redraw or scroll in between, so the
-     * cursor row no longer matched the tapped row and nothing happened.
+     * cursor row no longer matched the tapped row and nothing happened.</p>
+     *
+     * <p>{@link TermuxActivity#isTerminalComposeTap(MotionEvent)} additionally recognises the
+     * composer from the screen contents, so the switch also happens when the hardware cursor is not
+     * on the tapped row (e.g. after hiding the keyboard, backgrounding and returning to the app).</p>
      */
     @Override
     public boolean onSingleTapUpImmediate(MotionEvent e) {
@@ -201,7 +206,7 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
         // so that a double tap on a link is never mistaken for opening the compose field.
         if (mActivity.getProperties().shouldOpenTerminalTranscriptURLOnClick()) return false;
 
-        if (!mActivity.isTerminalCursorLineTap(e)) return false;
+        if (!mActivity.isTerminalComposeTap(e)) return false;
 
         mActivity.showTerminalToolbarTextInput();
         return true;

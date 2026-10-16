@@ -31,6 +31,10 @@ import android.widget.Toast;
 import com.termux.R;
 import com.termux.app.api.file.FileReceiverActivity;
 import com.termux.app.opencode.OpenCodeSetup;
+import com.termux.app.opencode.TuiBridge;
+import com.termux.app.opencode.TuiClassifier;
+import com.termux.app.opencode.TuiSnapshot;
+import com.termux.app.opencode.TuiState;
 import com.termux.app.terminal.TerminalCursorLine;
 import com.termux.app.terminal.TermuxActivityRootView;
 import com.termux.app.terminal.TermuxTerminalSessionActivityClient;
@@ -659,6 +663,46 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         final int tappedRow = terminalView.getColumnAndRow(e, false)[1];
         return TerminalCursorLine.isCursorLine(tappedRow, emulator.getCursorRow(),
             terminalView.getTopRow(), emulator.mRows);
+    }
+
+    /**
+     * Whether the given terminal tap should open the toolbar's compose field.
+     *
+     * <p>This is the reliable superset of {@link #isTerminalCursorLineTap(MotionEvent)}: a tap on
+     * the cursor line still counts, but so does a tap anywhere in the OpenCode TUI's composer
+     * region. The cursor-line test alone depended on the hardware cursor sitting on the tapped row,
+     * which does not hold in every case (for example after hiding the keyboard, backgrounding and
+     * re-entering the app, when the TUI has redrawn and parked the cursor elsewhere). Recognising
+     * the composer from the screen itself removes that dependency, so tapping the TUI input box
+     * always switches to the compose field.</p>
+     */
+    public boolean isTerminalComposeTap(MotionEvent e) {
+        if (isTerminalCursorLineTap(e)) return true;
+
+        final TerminalView terminalView = getTerminalView();
+        if (terminalView == null) return false;
+
+        final TerminalEmulator emulator = terminalView.mEmulator;
+        if (emulator == null || !emulator.isAlternateBufferActive()) return false;
+
+        final TerminalSession session = getCurrentSession();
+        if (!TuiBridge.isOpenCodeTuiSession(session)) return false;
+
+        final TuiSnapshot snapshot = TuiBridge.snapshot(session);
+        if (snapshot == null) return false;
+
+        final TuiState state = TuiClassifier.classify(snapshot);
+        // Never steal a tap that belongs to an open dialog or palette.
+        if (state == TuiState.DIALOG) return false;
+
+        final int tappedRow = terminalView.getColumnAndRow(e, false)[1];
+        if (TuiClassifier.isComposerRow(snapshot, tappedRow)) return true;
+
+        // The TUI is running but its composer markers could not be recognised - a non-empty draft
+        // in a narrow window hides both the placeholder and the shortcut footer. The composer is
+        // still the bottom block, so fall back to the bottom band instead of letting the tap reach
+        // the TUI and type into it.
+        return state == TuiState.UNKNOWN && TuiClassifier.isComposerBandRow(snapshot, tappedRow);
     }
 
     private void saveTerminalToolbarTextInput(Bundle savedInstanceState) {

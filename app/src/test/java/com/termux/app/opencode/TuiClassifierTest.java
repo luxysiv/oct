@@ -132,4 +132,92 @@ public class TuiClassifierTest {
         assertEquals(1, s.rowCount());
     }
 
+    @Test
+    public void composerRowIsAnchoredOnThePlaceholder() {
+        String[] lines = filled(20);
+        lines[19] = "Ask anything… \"x\"";
+        TuiSnapshot s = snapshot(true, lines);
+        // bottom = 19, band = max(8, min(20/3, 12)) = 8, so rows 12..19 are the composer.
+        assertTrue(TuiClassifier.isComposerRow(s, 19));
+        assertTrue(TuiClassifier.isComposerRow(s, 12));
+        assertFalse(TuiClassifier.isComposerRow(s, 11));
+    }
+
+    @Test
+    public void composerRowIsAnchoredOnTheShortcutFooter() {
+        String[] lines = filled(20);
+        lines[19] = "tab agents            ctrl+p commands";
+        TuiSnapshot s = snapshot(true, lines);
+        assertTrue(TuiClassifier.isComposerRow(s, 19));
+        assertTrue(TuiClassifier.isComposerRow(s, 12));
+        assertFalse(TuiClassifier.isComposerRow(s, 11));
+    }
+
+    @Test
+    public void composerRowIsAnchoredOnTheBusyFooter() {
+        String[] lines = filled(20);
+        lines[19] = "esc  again to interrupt";
+        TuiSnapshot s = snapshot(true, lines);
+        assertTrue(TuiClassifier.isComposerRow(s, 19));
+        assertTrue(TuiClassifier.isComposerRow(s, 12));
+        assertFalse(TuiClassifier.isComposerRow(s, 11));
+    }
+
+    @Test
+    public void composerRowKeepsADistanceFromTheTranscript() {
+        // The block above the composer must stay reachable, e.g. for inline permission buttons.
+        String[] lines = filled(40);
+        lines[39] = "Ask anything… \"x\"";
+        TuiSnapshot s = snapshot(true, lines);
+        // bottom = 39, band = max(8, min(40/3, 12)) = 12, so rows 28..39 only.
+        assertTrue(TuiClassifier.isComposerRow(s, 39));
+        assertTrue(TuiClassifier.isComposerRow(s, 28));
+        assertFalse(TuiClassifier.isComposerRow(s, 27));
+    }
+
+    @Test
+    public void composerRowIsFalseWhenComposerNotOnScreen() {
+        String[] lines = filled(20);
+        Arrays.fill(lines, "ordinary transcript line");
+        assertFalse(TuiClassifier.isComposerRow(snapshot(true, lines), 19));
+    }
+
+    @Test
+    public void composerRowIsFalseForDialog() {
+        String[] lines = filled(20);
+        lines[0] = "Select model";
+        assertFalse(TuiClassifier.isComposerRow(snapshot(true, lines), 19));
+    }
+
+    @Test
+    public void composerRowOutOfRangeIsFalse() {
+        String[] lines = filled(10);
+        lines[9] = "Ask anything";
+        TuiSnapshot s = snapshot(true, lines);
+        assertFalse(TuiClassifier.isComposerRow(s, -1));
+        assertFalse(TuiClassifier.isComposerRow(s, 10));
+        assertFalse(TuiClassifier.isComposerRow(null, 0));
+    }
+
+    @Test
+    public void composerBandRowIgnoresMissingMarkers() {
+        // A non-empty draft in a narrow window hides the placeholder and the shortcut footer.
+        String[] lines = filled(30);
+        Arrays.fill(lines, "assistant response text");
+        TuiSnapshot s = snapshot(true, lines);
+        // band = max(8, min(30/3, 12)) = 10, so rows 20..29 are the fallback band.
+        assertTrue(TuiClassifier.isComposerBandRow(s, 29));
+        assertTrue(TuiClassifier.isComposerBandRow(s, 20));
+        assertFalse(TuiClassifier.isComposerBandRow(s, 19));
+        assertFalse(TuiClassifier.isComposerBandRow(s, -1));
+        assertFalse(TuiClassifier.isComposerBandRow(s, 30));
+        assertFalse(TuiClassifier.isComposerBandRow(null, 0));
+    }
+
+    private static String[] filled(int count) {
+        String[] lines = new String[count];
+        Arrays.fill(lines, "");
+        return lines;
+    }
+
 }

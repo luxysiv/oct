@@ -132,6 +132,92 @@ public final class TuiClassifier {
         return false;
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Composer region.
+    // ---------------------------------------------------------------------------------------------
+
+    /** Placeholder prefixes that mark the composer's textarea row itself. */
+    public static final String[] COMPOSER_PLACEHOLDER_TOKENS = {
+        "Ask anything",
+        "Run a command",
+    };
+
+    /** Least number of rows counted as the composer block, so the empty composer is covered. */
+    public static final int COMPOSER_BAND_MIN_ROWS = 8;
+
+    /** Most rows counted as the composer block, so a tap never swallows the whole transcript. */
+    public static final int COMPOSER_BAND_MAX_ROWS = 12;
+
+    /**
+     * Number of rows the composer draws below its textarea: one padding row, the metadata row
+     * (agent / model), the bottom-border row and the footer row.
+     */
+    public static final int COMPOSER_ROWS_BELOW_TEXTAREA = 4;
+
+    /**
+     * Whether screen {@code row} is inside the composer block (the region that holds the input box).
+     *
+     * <p>The composer is always the bottom-most block of the TUI. It is anchored by its footer
+     * (the {@code agents}/{@code commands} shortcut hints, or the {@code esc interrupt} hint while
+     * running) or, failing that, by the textarea placeholder. From that anchor the block is assumed
+     * to be at most {@code max(8, min(rows/3, 12))} rows tall, which covers the empty composer and
+     * a short draft without reaching into the transcript.</p>
+     *
+     * <p>Anchoring on the screen contents (instead of the hardware cursor) is the point: the cursor
+     * is hidden or parked at (0,0) by OpenTUI in some redraws, so it cannot be trusted to sit on the
+     * tapped row.</p>
+     *
+     * @return false when {@code snapshot} is not showing the composer at all, so a tap on a shell
+     *         prompt, a dialog or a transcript is never treated as the input box.
+     */
+    public static boolean isComposerRow(TuiSnapshot snapshot, int row) {
+        if (snapshot == null) return false;
+        int rows = snapshot.rowCount();
+        if (row < 0 || row >= rows) return false;
+        if (!hasComposer(snapshot) && !hasBusy(snapshot)) return false;
+
+        int footer = -1;
+        int placeholder = -1;
+        for (int r = 0; r < rows; r++) {
+            String line = lower(snapshot.line(r));
+            if ((line.contains(COMPOSER_FOOTER_AGENTS) && line.contains(COMPOSER_FOOTER_COMMANDS))
+                || (line.contains(BUSY_INTERRUPT) && line.contains(BUSY_ESC))) {
+                footer = r;
+            }
+            for (String token : COMPOSER_PLACEHOLDER_TOKENS) {
+                if (line.contains(lower(token))) placeholder = r;
+            }
+        }
+
+        int bottom;
+        if (footer >= 0) bottom = footer;
+        else if (placeholder >= 0) bottom = Math.min(rows - 1, placeholder + COMPOSER_ROWS_BELOW_TEXTAREA);
+        else bottom = rows - 1;
+
+        return inComposerBand(rows, row, bottom);
+    }
+
+    /**
+     * Whether {@code row} is in the bottom band that the composer occupies, without requiring any
+     * composer marker to be visible.
+     *
+     * <p>Used as a last resort for the one state this classifier cannot recognise from text: the
+     * TUI is running but a non-empty draft in a narrow window ({@code width < 44}) hides both the
+     * placeholder and the shortcut footer, so the screen looks like an ordinary transcript.</p>
+     */
+    public static boolean isComposerBandRow(TuiSnapshot snapshot, int row) {
+        if (snapshot == null) return false;
+        int rows = snapshot.rowCount();
+        if (row < 0 || row >= rows) return false;
+        return inComposerBand(rows, row, rows - 1);
+    }
+
+    private static boolean inComposerBand(int rows, int row, int bottom) {
+        int band = Math.max(COMPOSER_BAND_MIN_ROWS, Math.min(rows / 3, COMPOSER_BAND_MAX_ROWS));
+        int top = Math.max(0, bottom - band + 1);
+        return row >= top && row <= bottom;
+    }
+
     private static String lower(String value) {
         return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
